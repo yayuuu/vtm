@@ -73,9 +73,15 @@ namespace netxs::app::terminal
     auto build_terminal = [](eccc appcfg, settings& config)
     {
         auto border = std::max(0, config.settings::take(attr::borders, 0));
-        auto borders = dent{ border, border, 0, 0 };
+        auto borders = dent{
+            std::max(0, config.settings::take("/config/terminal/padding/left", border)),
+            std::max(0, config.settings::take("/config/terminal/padding/right", border)),
+            std::max(0, config.settings::take("/config/terminal/padding/top", 0)),
+            std::max(0, config.settings::take("/config/terminal/padding/bottom", 0)) };
         auto window = ui::cake::ctor();
+        window->base::property("applet.integrated_header", false) = config.settings::take("/config/terminal/menu/integrated_title", false);
         auto& window_clr = window->base::field(skin::color(tone::window_clr));
+        auto& padding_clr = window->base::field(config.settings::take("/config/terminal/padding/color", cell{}.bgc(0xFF000000)));
         auto& is_focused = window->base::field(faux);
         window->plugin<pro::focus>()
             //->plugin<pro::track>()
@@ -103,7 +109,7 @@ namespace netxs::app::terminal
                 boss.LISTEN(tier::release, e2::render::background::any, parent_canvas, -, (borders)) // Shade left/right borders.
                 {
                     auto full = parent_canvas.full();
-                    parent_canvas.cage(full, borders, [&](cell& c){ c.fuse(window_clr); });
+                    parent_canvas.cage(full, borders, [&](cell& c){ c.fuse(padding_clr).txt(whitespace); });
                 };
             });
         auto layers = term_stat_area->attach(slot::_1, ui::cake::ctor())
@@ -151,6 +157,18 @@ namespace netxs::app::terminal
 
         if (appcfg.cmd.empty()) appcfg.cmd = os::env::shell();//todo revise + " -i";
         auto terminal_context = config.settings::push_context("/config/terminal/");
+        window->base::bind_property<tier::preview>("applet.header", *window, e2::form::prop::ui::header) = appcfg.cmd;
+        window->invoke([](auto& boss)
+        {
+            boss.LISTEN(tier::preview, e2::form::prop::ui::header, new_title)
+            {
+                boss.base::signal(tier::release, e2::form::prop::ui::header, new_title);
+                // The menu consumes the release notification locally. Keep
+                // the original preview bubbling to the DirectVT gate so the
+                // desktop receives the live title, not just its bitmap.
+                boss.bell::passover();
+            };
+        });
         auto term = scroll->attach(ui::term::ctor())
             ->plugin<pro::focus>(pro::focus::mode::focused)
             ->invoke([&](auto& boss)
@@ -228,8 +246,52 @@ namespace netxs::app::terminal
             ->limits({ -1, 1 }, { -1, 1 });
 
         auto [slot1, cover, menu_data] = app::shared::menu::load(config);
-        auto menu = object->attach(slot::_1, slot1)
-            ->shader(window_clr);
+        auto menu = object->attach(slot::_1, slot1);
+        auto half_edges = config.settings::take("menu/half_edges", false);
+        menu->invoke([&, half_edges](auto& boss)
+        {
+            boss.LISTEN(tier::release, e2::render::background::any, parent_canvas, -, (half_edges))
+            {
+                auto area = parent_canvas.full();
+                if (!half_edges || area.size.y < 3)
+                {
+                    parent_canvas.fill(area, [&](cell& c){ c.fuse(window_clr); });
+                }
+                else
+                {
+                    auto top = area;
+                    top.size.y = 1;
+                    auto bottom = top;
+                    bottom.coor.y += area.size.y - 1;
+                    auto middle = area;
+                    middle.coor.y++; middle.size.y -= 2;
+                    parent_canvas.fill(top, [&](cell& c)
+                    {
+                        auto bar = c; bar.fuse(window_clr);
+                        c.txt("▄"sv).fgc(bar.bgc());
+                    });
+                    parent_canvas.fill(middle, [&](cell& c){ c.fuse(window_clr); });
+                    parent_canvas.fill(bottom, [&](cell& c)
+                    {
+                        auto bar = c; bar.fuse(window_clr);
+                        c.txt("▀"sv).fgc(bar.bgc()).bgc(0xFF000000);
+                    });
+                }
+            };
+            boss.LISTEN(tier::release, e2::postrender, parent_canvas, -, (half_edges))
+            {
+                auto top = parent_canvas.full();
+                if (half_edges && top.size.y >= 3)
+                {
+                    auto bottom = top;
+                    bottom.coor.y += bottom.size.y - 1;
+                    top.size.y = bottom.size.y = 1;
+                    parent_canvas.fill(top, [](cell& c){ c.txt("▄"sv); });
+                    parent_canvas.fill(bottom, [](cell& c){ c.txt("▀"sv); });
+                }
+            };
+        });
+        if (config.settings::take("menu/blur", false)) menu->plugin<pro::acryl>();
 
         cover->invoke([&](auto& boss)
         {

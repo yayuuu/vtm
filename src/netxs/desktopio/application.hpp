@@ -284,6 +284,10 @@ namespace netxs::app::shared
         auto& accesslock_state = boss.base::property("applet.accesslock_state", 0);
         boss.base::add_methods(basename::applet,
         {
+            { "Title",              [&]
+                                    {
+                                        luafx.set_return(boss.base::property("applet.header"));
+                                    }},
             { "GetTitlesHeight",    [&]
                                     {
                                         auto h = 0;
@@ -528,7 +532,7 @@ namespace netxs::app::shared
                 //todo
                 //->alignment({ snap::both, snap::both }, { macstyle ? snap::head : snap::tail, snap::both })
                 ->active();
-            auto makeitem = [&](auto& config)
+            auto makeitem = [&](auto& config, bool window_control = false)
             {
                 auto& props = std::get<0>(config);
                 auto& setup = std::get<1>(config);
@@ -538,7 +542,7 @@ namespace netxs::app::shared
                 auto& hover = props.hover;
                 auto button = ui::item::ctor(label)->drawdots();
                 button->active(); // Always active for tooltips.
-                if (alive)
+                if (alive && (!window_control || button->bell::indexer.config.settings::take("/config/terminal/menu/controls_hover", true)))
                 {
                     if (hover.clr()) button->shader(cell::shaders::mimic(hover), e2::form::state::hover);
                     else             button->shader(cell::shaders::xlight,       e2::form::state::hover);
@@ -608,15 +612,15 @@ namespace netxs::app::shared
                 };
                 if (macstyle)
                 {
-                    ctrllist->attach(makeitem(control[2]));
-                    ctrllist->attach(makeitem(control[0]));
-                    ctrllist->attach(makeitem(control[1]));
+                    ctrllist->attach(makeitem(control[2], true));
+                    ctrllist->attach(makeitem(control[0], true));
+                    ctrllist->attach(makeitem(control[1], true));
                 }
                 else
                 {
-                    ctrllist->attach(makeitem(control[0]));
-                    ctrllist->attach(makeitem(control[1]));
-                    ctrllist->attach(makeitem(control[2]));
+                    ctrllist->attach(makeitem(control[0], true));
+                    ctrllist->attach(makeitem(control[1], true));
+                    ctrllist->attach(makeitem(control[2], true));
                 }
             }
             auto scrlarea = menufork->attach(menuslot, ui::cake::ctor());

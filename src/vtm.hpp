@@ -3,6 +3,10 @@
 
 #pragma once
 
+#if defined(__linux__) && defined(__GLIBC__)
+#include <spawn.h>
+#endif
+
 namespace netxs::app::vtm
 {
     static constexpr auto id = "vtm";
@@ -155,6 +159,8 @@ namespace netxs::app::vtm
                 };
                 boss.LISTEN(tier::release, e2::form::upon::dragged, gear, memo)
                 {
+                    robo.pacify();
+                    if (!boss.bell::indexer.config.settings::take("/config/desktop/window_inertia", true)) return;
                     if (gear.meta(mods::anyCtrl))
                     {
                         robo.actify(gear.fader<quadratic<twod>>(2s), [&](auto delta)
@@ -640,8 +646,155 @@ namespace netxs::app::vtm
                 base::plugin<pro::mouse>();
                 base::plugin<pro::d_n_d>();
                 base::plugin<pro::ghost>();
-                auto& title = base::plugin<pro::title>(what.applet->base::property("applet.header"), what.applet->base::property("applet.footer"));
-                base::plugin<pro::sizer>();
+                auto integrated_title = what.applet->base::property("applet.integrated_header", false);
+                auto half_header = integrated_title && bell::indexer.config.settings::take("/config/terminal/menu/half_edges", false);
+                auto& cropped_header = base::property("window.cropped_header", false);
+                base::property("window.half_edges", false) = half_header;
+                auto& title = base::plugin<pro::title>(what.applet->base::property("applet.header"), what.applet->base::property("applet.footer"), true, !integrated_title, !integrated_title);
+                if (integrated_title)
+                {
+                    // The applet/menu can consume the preview header event
+                    // before it bubbles to this window. Observe it at its
+                    // source so the taskbar receives the same live title.
+                    what.applet->LISTEN(tier::preview, e2::form::prop::ui::header, new_title, base::sensors)
+                    {
+                        if (title.head_text != new_title) title.header(new_title);
+                    };
+                    // DirectVT children paint on their own canvas. Composite the header
+                    // against the actual desktop here, after the child has supplied text.
+                    auto& header_back = base::field<ui::face>();
+                    auto& header_blur = base::field<ui::face>();
+                    auto& bottom_blur = base::field<ui::face>();
+                    auto& blur_cache = base::field<vrgb>();
+                    auto& header_hover = base::field<std::vector<argb>>();
+                    auto& hovered_control = base::field<si32>(-1);
+                    auto controls_hover = bell::indexer.config.settings::take("/config/terminal/menu/controls_hover", true);
+                    // Child control ids are local to its DirectVT process. Track the
+                    // pointer on the desktop window instead of looking those ids up.
+                    on(tier::mousepreview, input::key::MouseAny, [&, controls_hover](hids& gear)
+                    {
+                        auto point = twod{ gear.coord };
+                        auto first = base::size().x - 15;
+                        auto control = controls_hover && point.y >= (cropped_header ? 1 : 0) && point.y < 3
+                                                    && point.x >= std::max(0, first) && point.x < base::size().x
+                                     ? (point.x - first) / 5 : -1;
+                        if (std::exchange(hovered_control, control) != control) base::deface();
+                    });
+                    LISTEN(tier::release, e2::form::state::hover, count)
+                    {
+                        if (!count && std::exchange(hovered_control, -1) != -1) base::deface();
+                    };
+                    auto blur_enabled = bell::indexer.config.settings::take("/config/terminal/menu/blur", false);
+                    auto half_edges = bell::indexer.config.settings::take("/config/terminal/menu/half_edges", false);
+                    LISTEN(tier::release, e2::render::background::prerender, parent_canvas, -, (blur_enabled))
+                    {
+                        auto area = parent_canvas.full();
+                        if (cropped_header) parent_canvas.clip(parent_canvas.clip().trim(area - dent{ 0,0,1,0 }));
+                        auto size = twod{ area.size.x, std::min(3, area.size.y) };
+                        header_back.size(size);
+                        header_blur.size({ size.x + 12, size.y * 2 + 12 });
+                        for (auto y = 0; y < size.y; ++y)
+                        for (auto x = 0; x < size.x; ++x)
+                        {
+                            auto p = area.coor + twod{ x,y } - parent_canvas.core::coor();
+                            auto c = parent_canvas.core::size().inside(p) ? parent_canvas[p] : cell{};
+                            header_back[{ x,y }] = c;
+                        }
+                        // Sample each bar against the desktop, including both pixel
+                        // halves and a halo for the same blur at the top and bottom.
+                        auto sample_bar = [&](auto& buffer, twod origin)
+                        {
+                            auto blur_size = buffer.size();
+                            for (auto y = 0; y < blur_size.y; ++y)
+                            for (auto x = 0; x < blur_size.x; ++x)
+                            {
+                                auto p = origin + twod{ x-6,y/2-3 } - parent_canvas.core::coor();
+                                auto canvas_size = parent_canvas.core::size();
+                                p.x = std::clamp(p.x, 0, canvas_size.x-1);
+                                p.y = std::clamp(p.y, 0, canvas_size.y-1);
+                                auto [upper, lower] = parent_canvas[p].block_halves();
+                                buffer[{ x,y }].bgc(y&1 ? lower : upper);
+                            }
+                            if (blur_enabled)
+                            {
+                                blur_cache.resize(buffer.volume());
+                                for (auto repeat = 0; repeat < 2; ++repeat)
+                                    netxs::boxblur<vrgb::value_type, false>(buffer.begin(), blur_cache.begin(),
+                                        blur_size.x, blur_size.y, 3, blur_size.x, blur_size.x, 1,
+                                        [](auto c)->auto& { return c->bgc(); }, [](auto c)->auto& { return *c; });
+                            }
+                        };
+                        sample_bar(header_blur, area.coor);
+                        bottom_blur.size({ size.x + 12, 14 });
+                        sample_bar(bottom_blur, area.coor + twod{ 0,area.size.y-1 });
+                    };
+                    LISTEN(tier::release, e2::postrender, parent_canvas, -, (half_edges, controls_hover))
+                    {
+                        auto area = parent_canvas.full();
+                        auto size = header_back.size();
+                        if (cropped_header)
+                        {
+                            // Child menu painters use explicit rectangles, which can
+                            // bypass clip(). Put the reserved status row back verbatim.
+                            for (auto x = 0; x < std::min(size.x, area.size.x); ++x)
+                            {
+                                auto p = area.coor + twod{ x,0 } - parent_canvas.core::coor();
+                                if (parent_canvas.core::size().inside(p)) parent_canvas[p] = header_back[{ x,0 }];
+                            }
+                        }
+                        auto tint = skin::color(tone::winfocus).bgc();
+                        auto& hover = header_hover;
+                        hover.assign(size.x, argb{});
+                        if (controls_hover && hovered_control >= 0 && size.y == 3)
+                        {
+                            auto first = size.x - 15 + hovered_control * 5;
+                            auto colour = hovered_control == 2 ? argb{ 0xFFFF3030 } : argb{ 0xFFFFFFFF };
+                            for (auto x = std::max(0, first); x < std::min(size.x, first + 5); ++x) hover[x] = colour;
+                        }
+                        for (auto y = cropped_header ? 1 : 0; y < std::min(size.y, area.size.y); ++y)
+                        for (auto x = 0; x < std::min(size.x, area.size.x); ++x)
+                        {
+                            auto p = area.coor + twod{ x,y } - parent_canvas.core::coor();
+                            if (!parent_canvas.core::size().inside(p)) continue;
+                            auto& c = parent_canvas[p];
+                            auto upper = header_blur[{ x+6,y*2+6 }].bgc();
+                            auto lower = header_blur[{ x+6,y*2+7 }].bgc();
+                            upper.mix(tint); lower.mix(tint);
+                            if (hover[x].alpha())
+                            {
+                                if (hover[x].chan.r > 80 && hover[x].chan.r > hover[x].chan.g*2)
+                                {
+                                    upper.mix(argb{ 0xA0FF3030 }); lower.mix(argb{ 0xA0FF3030 });
+                                }
+                                else { upper.xlight(); lower.xlight(); }
+                            }
+                            if (half_edges && size.y == 3 && y == 0)
+                                c.txt("▄"sv).inv(false).fgc(lower).bgc(header_back[{ x,y }].block_halves(true).first);
+                            else if (half_edges && size.y == 3 && y == 2)
+                                c.txt("▄"sv).fgc(0xFF000000).bgc(upper);
+                            else if (c.isspc()) c.txt("▄"sv).fgc(lower).bgc(upper);
+                            else { upper.mix(lower,128); c.bgc(upper); }
+                        }
+                        // Extend the bottom edge into the side padding, composing
+                        // each column against its own desktop pixels, like the header.
+                        if (area.size.x > 2 && area.size.y > 3)
+                        {
+                            auto left = area.coor + twod{ 0,area.size.y-1 } - parent_canvas.core::coor();
+                            for (auto x = 0; x < area.size.x; ++x)
+                            {
+                                auto p = left + twod{ x,0 };
+                                if (!parent_canvas.core::size().inside(p)) continue;
+                                auto upper = bottom_blur[{ x+6,6 }].bgc();
+                                auto lower = bottom_blur[{ x+6,7 }].bgc();
+                                upper.mix(tint); lower.mix(tint);
+                                auto& c = parent_canvas[p];
+                                if (half_edges) c.txt("▄"sv).inv(false).fgc(lower).bgc(0xFF000000);
+                                else c.txt("▄"sv).inv(false).fgc(lower).bgc(upper);
+                            }
+                        }
+                    };
+                }
+                base::plugin<pro::sizer>(dent{ 2,2,1,1 }, half_header ? dent{ 0,0,-1,0 } : dent{});
                 base::plugin<pro::frame>();
                 base::plugin<pro::light>();
                 base::plugin<pro::focus>();
@@ -650,6 +803,10 @@ namespace netxs::app::vtm
                 base::kind(base::reflow_root);
                 base::root(true);
                 base::property("window.menuid") = what.applet->base::property("applet.menuid");
+                if (what.applet->base::property("applet.region_hidden", false))
+                {
+                    base::property("window.workspace_origin", what.square.coor);
+                }
                 auto& config = bell::indexer.config;
                 auto window_context = config.settings::push_context("/config/events/window/");
                 auto script_list = config.settings::take_ptr_list_for_name("script");
@@ -774,6 +931,9 @@ namespace netxs::app::vtm
                 };
                 LISTEN(tier::release, e2::form::prop::ui::header, new_title)
                 {
+                    // Integrated terminal headers arrive as release events. Keep the
+                    // window's canonical title (and taskbar model) in sync as well.
+                    if (title.head_text != new_title) title.header(new_title);
                     auto tooltip_body = " " + new_title + " ";
                     base::signal(tier::preview, e2::form::prop::ui::tooltip, tooltip_body);
                 };
@@ -836,6 +996,7 @@ namespace netxs::app::vtm
                 };
 
                 auto& maximize_token = base::field<subs>();
+                auto& applying_maximized_layout = base::field<bool>();
                 auto& viewport_area = base::field<rect>();
                 auto& saved_area = base::field<rect>();
                 auto& what_copy = base::field<applink>();
@@ -859,15 +1020,19 @@ namespace netxs::app::vtm
                 {
                     if (maximize_token.size())
                     {
+                        // Stop watching geometry before restoring it: this is not a drag.
+                        maximize_token.clear();
+                        cropped_header = false;
+                        base::signal(tier::release, e2::config::plugins::sizer::alive, true);
                         if (saved_area)
                         {
-                            saved_area.coor += viewport_area.coor;
-                            base::extend(saved_area); // Restore window size and relative coor.
+                            auto restored_area = saved_area;
+                            restored_area.coor += viewport_area.coor;
+                            base::extend(restored_area); // Restore window size and relative coor.
                         }
-                        maximize_token.clear();
                     }
                 };
-                LISTEN(tier::preview, e2::form::size::enlarge::maximize, gear)
+                LISTEN(tier::preview, e2::form::size::enlarge::maximize, gear, -, (half_header))
                 {
                     auto viewport = gear.owner.base::signal(tier::request, e2::form::prop::viewport);
                     auto recalc = [&](auto viewport)
@@ -880,9 +1045,14 @@ namespace netxs::app::vtm
                             auto b = title.foot_size.y;
                             new_area -= dent{ 0, 0, t, b };
                         }
+                        // Keep the child's three-row menu, clipping its first row at
+                        // the server. The text row starts exactly below the status bar.
+                        if (cropped_header) new_area += dent{ 0,0,1,0 };
                         if (base::area() != new_area)
                         {
+                            applying_maximized_layout = true;
                             base::extend(new_area);
+                            applying_maximized_layout = false;
                         }
                     };
                     if (zorder == zpos::backmost) // It is a region view. Just resize it.
@@ -903,12 +1073,17 @@ namespace netxs::app::vtm
                         saved_area = base::area();
                         saved_area.coor -= viewport.coor;
                         viewport_area = viewport;
+                        cropped_header = half_header;
+                        base::signal(tier::release, e2::config::plugins::sizer::alive, false);
                         recalc(viewport);
                         gear.owner.LISTEN(tier::release, e2::form::prop::viewport, viewport, maximize_token, (recalc))
                         {
-                            viewport_area = viewport;
-                            viewport_area.coor += gear.owner.base::coor();
-                            recalc(viewport_area);
+                            // Notifications are gate-relative; retain the world
+                            // origin saved on maximize when switching workspaces.
+                            auto anchored = viewport;
+                            anchored.coor = viewport_area.coor;
+                            viewport_area.size = viewport.size;
+                            recalc(anchored);
                         };
                         gear.owner.LISTEN(tier::release, e2::form::size::restore, p, maximize_token)
                         {
@@ -922,7 +1097,7 @@ namespace netxs::app::vtm
                         };
                         LISTEN(tier::preview, e2::area, new_area, maximize_token)
                         {
-                            if (new_area != base::area())
+                            if (!applying_maximized_layout && new_area != base::area())
                             {
                                 if (new_area.size == base::size()) // Restore saved size.
                                 {
@@ -1057,10 +1232,24 @@ namespace netxs::app::vtm
             //              ├─ ...
             //              └─ menumodel_item_N (subset)
             auto menumodel_item_ptr = app_model.attach(ptr::shared<ui::base>(ui::tui_domain()));
-            menumodel_item_ptr->LISTEN(tier::request, e2::form::proceed::createby, gear)
+            menumodel_item_ptr->LISTEN(tier::request, e2::form::proceed::createby, gear, -, (weak = ui::wptr{ menumodel_item_ptr }))
             {
-                //todo set gear.menuid = menuid;
-                base::signal(tier::request, e2::form::proceed::createby, gear);
+                auto group = weak.lock();
+                if (!group) return;
+                auto& launcher = group->base::property<desk::spec>("window.appcfg");
+                if (launcher.wincoor_centered)
+                {
+                    // Taskbar clicks must use the same size-aware positioning
+                    // as desktop.Run; gear.slot contains the legacy cascade.
+                    auto appspec = launcher;
+                    // The loader moves spec.menuid into the model key. Use
+                    // the group's stable id, as desktop.Run already does.
+                    appspec.menuid = group->base::property("window.menuid");
+                    appspec.gear_id = gear.id;
+                    appspec.fixed = faux;
+                    base::signal(tier::request, desk::events::exec, appspec);
+                }
+                else base::signal(tier::request, e2::form::proceed::createby, gear);
             };
             auto iter = app_configs.find(menuid);
             assert(iter != app_configs.end());
@@ -1093,6 +1282,27 @@ namespace netxs::app::vtm
             }
             return *menumodel_item_ptr;
         }
+        auto workspace_at(twod position)
+        {
+            auto result = sptr{};
+            auto distance = std::numeric_limits<si32>::max();
+            for (auto& window : base::subset)
+            {
+                if (window->base::property("window.menuid") != "workspaces") continue;
+                auto origin = window->base::template property<twod>("window.workspace_origin", twod{});
+                auto delta = position - origin;
+                auto candidate = std::abs(delta.y) + std::abs(delta.x);
+                if (candidate < distance) { distance = candidate; result = window; }
+            }
+            return result;
+        }
+        auto workspace_of(ui::base& window)
+        {
+            auto owner = window.base::template property<id_t>("window.workspace", 0);
+            for (auto& region : base::subset)
+                if (region->id == owner) return region;
+            return workspace_at(window.base::coor());
+        }
         auto create_window(applink& what, bool is_handoff = faux)
         {
             if (!is_handoff)
@@ -1104,10 +1314,59 @@ namespace netxs::app::vtm
 
             auto& cfg = menumodel_get_appconfig(what.menuid);
             auto& applet_area = what.applet->base::bind_property("applet.area", *window_ptr, e2::area);
-                 if (applet_area)                 window_ptr->base::extend(applet_area);
+                 if (is_handoff && what.square)   window_ptr->base::extend(what.square);
+            else if (applet_area)                 window_ptr->base::extend(applet_area);
             else if (cfg.winsize && !what.forced) window_ptr->base::extend({ what.square.coor, cfg.winsize });
             else if (what.square)                 window_ptr->base::extend(what.square);
 
+            if (what.menuid != "workspaces")
+            {
+                auto owner = what.applet->base::template property<id_t>("window.workspace", 0);
+                if (!owner) if (auto region = workspace_at(window_ptr->base::coor())) owner = region->id;
+                window_ptr->base::property<id_t>("window.workspace") = owner;
+                window_ptr->base::property<bool>("window.fullscreen_workspace") = what.applet->base::template property<bool>("window.fullscreen_workspace", false);
+                auto& workspace_tokens = window_ptr->base::field<subs>();
+                window_ptr->LISTEN(tier::release, e2::form::state::focus::on, gear_id, workspace_tokens, (weak = ui::wptr{ window_ptr }))
+                {
+                    auto window_ptr = weak.lock();
+                    if (auto gear = base::getref<hids>(gear_id); gear && window_ptr)
+                    {
+                        auto& gate = gear->owner;
+                        gate.base::property<id_t>("workspace.gear") = gear_id;
+                        auto& remembered = gate.base::template property<std::unordered_map<id_t, ui::wptr>>("workspace.focus", {});
+                        if (auto region = workspace_of(*window_ptr)) remembered[region->id] = window_ptr;
+                    }
+                };
+                window_ptr->LISTEN(tier::release, e2::form::drag::start::any, gear, workspace_tokens, (weak = ui::wptr{ window_ptr }))
+                {
+                    if (auto window = weak.lock()) window->base::property<id_t>("window.dragging") = gear.id;
+                };
+                window_ptr->LISTEN(tier::release, e2::form::drag::cancel::any, gear, workspace_tokens, (weak = ui::wptr{ window_ptr }))
+                {
+                    if (auto window = weak.lock()) window->base::property<id_t>("window.dragging") = 0;
+                };
+                window_ptr->LISTEN(tier::release, e2::form::upon::dragged, gear, workspace_tokens, (weak = ui::wptr{ window_ptr }))
+                {
+                    auto window_ptr = weak.lock();
+                    if (!window_ptr) return;
+                    window_ptr->base::property<id_t>("window.dragging") = 0;
+                    auto viewport = gear.owner.base::signal(tier::request, e2::form::prop::viewport);
+                    auto position = window_ptr->base::coor() + twod{ gear.coord };
+                    auto region = workspace_at(viewport.hittest(position) ? gear.owner.base::coor() : position);
+                    if (viewport.hittest(position))
+                    {
+                        auto selected = gear.owner.base::template property<id_t>("workspace.active", 0);
+                        for (auto& candidate : base::subset)
+                            if (candidate->id == selected) { region = candidate; break; }
+                    }
+                    if (region)
+                    {
+                        window_ptr->base::property<id_t>("window.workspace") = region->id;
+                        auto& remembered = gear.owner.base::template property<std::unordered_map<id_t, ui::wptr>>("workspace.focus", {});
+                        remembered[region->id] = window_ptr;
+                    }
+                };
+            }
             window_ptr->attach(what.applet);
 
             auto root_ptr = is_handoff ? sptr{} : what.applet;
@@ -1129,6 +1388,10 @@ namespace netxs::app::vtm
             conf_rec.footer     = config.settings::take_value_from(item_ptr, attr::footer,   fallback.footer  );
             conf_rec.winsize    = config.settings::take_value_from(item_ptr, attr::winsize,  fallback.winsize );
             conf_rec.wincoor    = config.settings::take_value_from(item_ptr, attr::wincoor,  fallback.wincoor );
+            conf_rec.wincoor_relative = config.settings::take_value_from(item_ptr, "wincoor_relative", fallback.wincoor_relative);
+            conf_rec.wincoor_centered = config.settings::take_value_from(item_ptr, "wincoor_centered", fallback.wincoor_centered);
+            conf_rec.wincoor_cascade = config.settings::take_value_from(item_ptr, "wincoor_cascade", fallback.wincoor_cascade);
+            conf_rec.fit_viewport = config.settings::take_value_from(item_ptr, "fit_viewport", fallback.fit_viewport);
             conf_rec.winform    = config.settings::take_value_from(item_ptr, attr::winform,  fallback.winform, shared::win::options);
             conf_rec.appcfg.cwd = config.settings::take_value_from(item_ptr, attr::cwd,      fallback.appcfg.cwd);
             conf_rec.appcfg.cfg = config.settings::take_value_from(item_ptr, attr::cfg,      ""s);
@@ -1220,7 +1483,7 @@ namespace netxs::app::vtm
             {
                 return true;
             }
-            gear.owner.base::signal(tier::preview, e2::form::size::restore);
+            if (gear.owner.base::subset.size() > 1) gear.owner.base::signal(tier::preview, e2::form::size::restore);
 
             auto window_ptr = base::signal(tier::request, e2::form::layout::go::item); // Take current window.
             if (window_ptr) window_ptr->base::signal(tier::release, e2::form::layout::unselect, gear); // Hide current window if it was hidden before focusing.
@@ -1236,7 +1499,12 @@ namespace netxs::app::vtm
                 {
                     window_ptr->base::signal(tier::request, e2::form::prop::window::accesslock, allowed_gear_id); // Access is not allowed if returned zero.
                 }
-                if (allowed_gear_id || --count == 0) break; // Try the next window if access is not allowed.
+                auto active_workspace = gear.owner.base::template property<id_t>("workspace.active", 0);
+                if (!active_workspace) if (auto region = workspace_at(gear.owner.base::coor())) active_workspace = region->id;
+                auto belongs = window_ptr && window_ptr->base::property("window.menuid") != "workspaces"
+                            && (!active_workspace || window_ptr->base::template property<id_t>("window.workspace", 0) == active_workspace);
+                if (allowed_gear_id && belongs) break;
+                if (--count == 0) { window_ptr.reset(); break; }
             }
 
             if (window_ptr)
@@ -1371,6 +1639,39 @@ namespace netxs::app::vtm
                                                 gear.set_handled();
                                             });
                                         }},
+                { "RunBackground",      [&]
+                                        {
+                                            auto command = luafx.get_args_or(1, ""s);
+                                            if (!command.empty())
+                                                std::thread([command = std::move(command)]
+                                                {
+                                                    #if defined(__linux__) && defined(__GLIBC__)
+                                                        // Background programs may daemonize (e.g. xclip).
+                                                        // Never let them retain desktop IPC or PTY handles.
+                                                        auto actions = posix_spawn_file_actions_t{};
+                                                        if (::posix_spawn_file_actions_init(&actions) == 0)
+                                                        {
+                                                            if (::posix_spawn_file_actions_addclosefrom_np(&actions, 3) == 0
+                                                             && ::posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0) == 0
+                                                             && ::posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0) == 0
+                                                             && ::posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0) == 0)
+                                                            {
+                                                                auto child = pid_t{};
+                                                                char* args[]{ const_cast<char*>("/bin/sh"), const_cast<char*>("-c"), const_cast<char*>(command.c_str()), nullptr };
+                                                                if (::posix_spawn(&child, "/bin/sh", &actions, nullptr, args, ::environ) == 0)
+                                                                {
+                                                                    auto status = int{};
+                                                                    while (::waitpid(child, &status, 0) == -1 && errno == EINTR) { }
+                                                                }
+                                                            }
+                                                            ::posix_spawn_file_actions_destroy(&actions);
+                                                        }
+                                                    #else
+                                                        ::system(command.c_str());
+                                                    #endif
+                                                }).detach();
+                                            luafx.set_return();
+                                        }},
                 { "Run",                [&]
                                         {
                                             luafx.run_with_gear([&](auto& gear)
@@ -1428,6 +1729,25 @@ namespace netxs::app::vtm
                                                 if (appspec.tooltip.empty()) appspec.tooltip = appspec.menuid;
                                                 base::signal(tier::request, desk::events::exec, appspec);
                                                 gear.set_handled();
+                                            });
+                                        }},
+                { "JumpWorkspace",      [&]
+                                        {
+                                            auto number = luafx.get_args_or(1, 1);
+                                            luafx.run_with_gear([&](auto& gear)
+                                            {
+                                                for (auto& group : app_model.subset)
+                                                {
+                                                    if (group->base::property("window.menuid") != "workspaces") continue;
+                                                    if (number < 1 || number > (si32)group->base::subset.size()) return;
+                                                    auto& model = *std::next(group->base::subset.begin(), number - 1);
+                                                    if (auto window = model->base::template property<ui::wptr>("window.wptr").lock())
+                                                    {
+                                                        gear.owner.base::signal(tier::release, e2::form::layout::jumpto, *window);
+                                                        gear.set_handled();
+                                                    }
+                                                    return;
+                                                }
                                             });
                                         }},
                 { "FocusNextWindow",    [&]
@@ -1625,14 +1945,22 @@ namespace netxs::app::vtm
                 auto& window = *window_ptr;
                 if (base::subset.size()) // Pass focus to the top most object.
                 {
-                    auto last_ptr = base::subset.back();
+                    auto last_ptr = sptr{};
+                    auto owner = window.base::template property<id_t>("window.workspace", 0);
+                    for (auto iter = base::subset.rbegin(); iter != base::subset.rend(); ++iter)
+                    {
+                        auto& candidate = *iter;
+                        if (candidate != window_ptr && !candidate->hidden && candidate->base::property("window.menuid") != "workspaces"
+                         && candidate->base::template property<id_t>("window.workspace", 0) == owner)
+                        { last_ptr = candidate; break; }
+                    }
                     auto gear_id_list = window.base::riseup(tier::request, e2::form::state::keybd::enlist);
                     for (auto gear_id : gear_id_list)
                     {
                         if (auto gear_ptr = base::getref<hids>(gear_id))
                         {
                             auto gear_test = base::signal(tier::request, e2::form::state::keybd::next, { gear_id, 0 });
-                            if (gear_test.second == 1) // If it is the last focused item.
+                            if (gear_test.second == 1 && last_ptr) // If it is the last focused item.
                             {
                                 pro::focus::set(last_ptr, gear_id, solo::off);
                             }
@@ -1695,9 +2023,13 @@ namespace netxs::app::vtm
             };
             LISTEN(tier::request, vtm::events::newapp, what)
             {
-                auto& cfg = menumodel_get_appconfig(what.menuid);
+                // exec temporarily selects the requested instance configuration in
+                // the group model; the persistent launcher still contains its default URL.
+                auto& cfg = menumodel_get_app_group(what.menuid).base::property<desk::spec>("window.appcfg");
                 what.applet = app::shared::builder(cfg.type)(cfg.appcfg, config);
                 what.applet->base::property("applet.menuid") = what.menuid;
+                what.applet->base::property("applet.integrated_header", false) =
+                    cfg.type == "term" && config.settings::take("/config/terminal/menu/integrated_title", false);
                 what.applet->base::bind_property<tier::preview>("applet.header", *what.applet, e2::form::prop::ui::header) = cfg.title;
                 what.applet->base::bind_property<tier::preview>("applet.footer", *what.applet, e2::form::prop::ui::footer) = cfg.footer;
                 app::shared::applet_kb_navigation(config, what.applet);
@@ -1792,6 +2124,10 @@ namespace netxs::app::vtm
                 auto menu_id = appspec.menuid;
                 auto wincoor = appspec.wincoor;
                 auto winsize = appspec.winsize;
+                auto relative = appspec.wincoor_relative;
+                auto centered = appspec.wincoor_centered;
+                auto cascade = appspec.wincoor_cascade;
+                auto fit_viewport = appspec.fit_viewport;
 
                 menumodel_set_appconfig(menu_id, appspec);
                 auto& menumodel_item = menumodel_get_app_group(menu_id);
@@ -1806,13 +2142,41 @@ namespace netxs::app::vtm
                 {
                     auto& gear = *gear_ptr;
                     auto viewport = gear.owner.base::signal(tier::request, e2::form::prop::viewport);
-                    if (wincoor == dot_00)
+                    what.square.size = winsize ? winsize : viewport.size * 3 / 4;
+                    if (centered)
                     {
-                        offset = (offset + dot_21 * 2) % std::max(dot_11, viewport.size * 7 / 32);
-                        wincoor = viewport.coor + offset + viewport.size * 1 / 32;
+                        // Use the current usable viewport, which already excludes
+                        // the taskbar and status bar. Fit before centering so large
+                        // launch sizes stay on screen at the current font/grid size.
+                        if (fit_viewport) what.square.size = std::min(what.square.size, std::max(dot_11, viewport.size - dot_11 * 2));
+                        wincoor = viewport.coor + (viewport.size - what.square.size) / 2;
+                        if (cascade)
+                        {
+                            // Each launcher has its own cascade in the current
+                            // user's viewport. Reset after resize/workspace changes
+                            // when the last instance closes, and before the next step
+                            // would leave the visible area.
+                            using positions = std::unordered_map<text, std::pair<rect, twod>>;
+                            auto& [previous_viewport, next_offset] = gear.owner.base::property<positions>("desktop.launch_cascade")[menu_id];
+                            auto available = viewport.coor + viewport.size - wincoor - what.square.size - dot_11;
+                            if (menumodel_item.base::subset.empty() || previous_viewport != viewport || next_offset.x > available.x || next_offset.y > available.y)
+                                next_offset = dot_00;
+                            previous_viewport = viewport;
+                            wincoor += next_offset;
+                            next_offset += dot_21 * 2;
+                        }
+                    }
+                    else
+                    {
+                        if (relative) wincoor += viewport.coor;
+                        else if (wincoor == dot_00)
+                        {
+                            offset = (offset + dot_21 * 2) % std::max(dot_11, viewport.size * 7 / 32);
+                            wincoor = viewport.coor + offset + viewport.size * 1 / 32;
+                        }
+                        if (fit_viewport) what.square.size = std::min(what.square.size, std::max(dot_11, viewport.coor + viewport.size - wincoor - dot_11));
                     }
                     what.square.coor = wincoor;
-                    what.square.size = winsize ? winsize : viewport.size * 3 / 4;
                     if (auto window = create_window(what))
                     {
                         //todo revise: Should the requester set focus on their own behalf?
@@ -1859,6 +2223,8 @@ namespace netxs::app::vtm
             };
             LISTEN(tier::request, vtm::events::handoff, what)
             {
+                what.square = what.applet->base::template property<rect>("workspace.saved_area", rect{ what.square });
+                what.forced = true;
                 create_window(what, true);
             };
 
@@ -1930,6 +2296,9 @@ namespace netxs::app::vtm
                             {
                                 auto mark = skin::color(tone::shadower);
                                 mark.bga(mark.bga() / 2);
+                                // Both colours belong to the wallpaper image. Dim
+                                // sextant ink by the same amount as its background.
+                                mark.fgc(mark.bgc());
                                 parent_canvas.fill(gate_area, [&](cell& c){ c.blend(mark); });
                             }
                             gate_area.coor -= dot_01 + parent_canvas.coor();
@@ -1943,7 +2312,7 @@ namespace netxs::app::vtm
                     {
                         if (auto window_ptr = std::static_pointer_cast<window_t>(item_ptr))
                         {
-                            fasten(window_ptr, window_ptr->highlighted, window_ptr->active, window_ptr->color, parent_canvas);
+                            if (window_ptr->base::subset.size() && window_ptr->base::subset.back()->base::property("applet.region_hidden", false)) continue;
                             auto zorder = window_ptr->zorder;
                             auto i = zorder == zpos::plain   ? 1 :
                                      zorder == zpos::topmost ? 2 : 0;
@@ -2086,6 +2455,7 @@ namespace netxs::app::vtm
                 usergate.base::riseup(tier::preview, e2::form::prop::ui::header, std::move(usergate.base::property("applet.saved_header")));
                 usergate.base::riseup(tier::preview, e2::form::prop::ui::footer, std::move(usergate.base::property("applet.saved_footer")));
                 auto applet_ptr = usergate.base::subset.back();
+                applet_ptr->base::property<bool>("window.fullscreen_workspace") = usergate.base::template property<bool>("workspace.switching", false);
                 auto gear_id_list = pro::focus::cut(applet_ptr);
                 applet_ptr->base::detach();
                 if (auto world_ptr = base::signal(tier::general, e2::config::creator))
@@ -2104,6 +2474,9 @@ namespace netxs::app::vtm
                 {
                     auto gear_id_list = pro::focus::cut(new_fullscreen.applet);
                     auto window_ptr = std::exchange(new_fullscreen.applet, new_fullscreen.applet->base::subset.front()); // Drop hosting window.
+                    new_fullscreen.applet->base::property<bool>("window.fullscreen_workspace") = true;
+                    new_fullscreen.applet->base::property<id_t>("window.workspace") = window_ptr->base::template property<id_t>("window.workspace", 0);
+                    new_fullscreen.applet->base::property<rect>("workspace.saved_area") = window_ptr->base::area();
                     window_ptr->base::detach();
                     auto applet_ptr = new_fullscreen.applet;
                     auto& applet = *applet_ptr;
@@ -2167,6 +2540,10 @@ namespace netxs::app::vtm
             {
                 user_name_utf8 = cell::to_utf8(uname.content());
             };
+            usergate.LISTEN(tier::preview, input::events::keybd::post, gear)
+            {
+                usergate.base::property<id_t>("workspace.gear") = gear.id;
+            };
             usergate.LISTEN(tier::release, e2::form::layout::shift, newpos)
             {
                 auto viewport = usergate.base::signal(tier::request, e2::form::prop::viewport);
@@ -2184,6 +2561,59 @@ namespace netxs::app::vtm
             };
             usergate.LISTEN(tier::release, e2::form::layout::jumpto, window_inst)
             {
+                auto region = window_inst.base::property("window.menuid") == "workspaces"
+                            ? window_inst.This() : workspace_of(window_inst);
+                if (region)
+                {
+                    if (memo.size())
+                    {
+                        usergate.base::property<bool>("workspace.switching") = true;
+                        usergate.base::signal(tier::release, e2::form::size::restore);
+                        usergate.base::property<bool>("workspace.switching") = false;
+                    }
+                    auto origin = region->base::template property<twod>("window.workspace_origin", twod{});
+                    auto viewport = usergate.base::signal(tier::request, e2::form::prop::viewport);
+                    usergate.base::property<id_t>("workspace.active") = region->id;
+                    auto gear_id = usergate.base::template property<id_t>("workspace.gear", 0);
+                    auto& remembered = usergate.base::template property<std::unordered_map<id_t, ui::wptr>>("workspace.focus", {});
+                    auto target = window_inst.base::property("window.menuid") == "workspaces" ? remembered[region->id].lock() : window_inst.This();
+                    if (target && (target->hidden || target->base::template property<id_t>("window.workspace", 0) != region->id)) target.reset();
+                    if (!target) for (auto& candidate : base::subset)
+                    {
+                        if (!candidate->hidden && candidate->base::template property<id_t>("window.workspace", 0) == region->id)
+                        { target = candidate; break; }
+                    }
+                    auto center = origin + viewport.center() - usergate.base::coor();
+                    usergate.base::signal(tier::release, e2::form::layout::shift, center);
+                    auto dragging = false;
+                    for (auto& candidate : base::subset)
+                        if (gear_id && candidate->base::template property<id_t>("window.dragging", 0) == gear_id) dragging = true;
+                    if (gear_id)
+                    {
+                        if (auto gear = base::getref<hids>(gear_id); gear && !dragging)
+                        {
+                            if (target)
+                            {
+                                remembered[region->id] = target;
+                                pro::focus::set(target, gear_id, solo::on);
+                                if (target->base::template property<bool>("window.fullscreen_workspace", false))
+                                {
+                                    target->base::enqueue([gear_id](auto& window)
+                                    {
+                                        if (auto gear = window.base::template getref<hids>(gear_id))
+                                            window.base::signal(tier::preview, e2::form::size::enlarge::fullscreen, *gear);
+                                    });
+                                }
+                            }
+                            else for (auto& candidate : base::subset)
+                            {
+                                if (candidate->base::property("window.menuid") != "workspaces")
+                                    pro::focus::off(candidate, gear_id);
+                            }
+                        }
+                    }
+                    return;
+                }
                 auto viewport = usergate.base::signal(tier::request, e2::form::prop::viewport);
                 auto object_area = window_inst.base::signal(tier::request, e2::form::prop::window::fullsize);
                 auto outside = viewport | object_area;
@@ -2213,7 +2643,7 @@ namespace netxs::app::vtm
             user_mouse.template draggable<hids::buttons::leftright>(true);
             if (!usergate.direct) // In dtvt+gui mode the left button draggability will be activated on set_fullscreen.
             {
-                user_mouse.template draggable<hids::buttons::left>(true);
+                user_mouse.template draggable<hids::buttons::left>(bell::indexer.config.settings::take("/config/desktop/viewport_drag", true));
             }
             usergate.LISTEN(tier::release, e2::form::drag::start::any, gear)
             {
@@ -2271,6 +2701,7 @@ namespace netxs::app::vtm
             app::shared::applet_kb_navigation(config, deskmenu_ptr);
             usergate.attach(std::move(deskmenu_ptr));
             usergate.base::extend({ vport, usrcfg.win }); // Restore user's last position.
+            if (auto region = workspace_at(vport)) usergate.base::property<id_t>("workspace.active") = region->id;
             lock.unlock();
             usergate.launch(lock);
             base::deface();

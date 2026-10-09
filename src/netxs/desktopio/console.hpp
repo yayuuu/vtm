@@ -582,7 +582,7 @@ namespace netxs::ui
         {
             fullscreen = state;
             auto& mouse = base::plugin<pro::mouse>();
-            mouse.draggable<hids::buttons::left>(state);
+            mouse.draggable<hids::buttons::left>(state && bell::indexer.config.settings::take("/config/desktop/viewport_drag", true));
         }
         void forward(auto& device)
         {
@@ -765,6 +765,9 @@ namespace netxs::ui
                     page_area.size = tooltip_page.limits();
                     fs_area.size = std::max(dot_00, fs_area.size - page_area.size);
                     page_area.coor = fs_area.clamp(page_area.coor);
+                    // Fill the complete tooltip rectangle. Its shorter rows
+                    // must not rely on trailing spaces to hide the desktop.
+                    canvas.fill(page_area, cell::shaders::fuse(cell{ props.tooltip_colors }.txt(" "sv)));
                     page_area.size.x = dot_mx.x; // Prevent line wrapping.
                     canvas.full(page_area);
                     canvas.cup(dot_00);

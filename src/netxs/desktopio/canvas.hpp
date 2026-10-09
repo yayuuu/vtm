@@ -2434,9 +2434,89 @@ namespace netxs
             px = 0;
             p2 = 0;
         }
+        // cell: Foreground coverage of each horizontal half (0..256).
+        // Sextants omit the empty, full, left-half and right-half patterns.
+        auto block_coverage() const -> std::pair<si32, si32>
+        {
+            auto cp = utf::to_code(gc.get());
+            if (cp >= 0x1FB00 && cp <= 0x1FB3B)
+            {
+                auto mask = cp - 0x1FB00 + 1;
+                if (mask >= 21) ++mask;
+                if (mask >= 42) ++mask;
+                auto bit = [&](auto n){ return (mask >> n) & 1; };
+                return { (2*(bit(0)+bit(1)) + bit(2)+bit(3))*256/6,
+                         (2*(bit(4)+bit(5)) + bit(2)+bit(3))*256/6 };
+            }
+            if (cp >= 0x2596 && cp <= 0x259F)
+            {
+                static constexpr auto masks = std::array{ 4,8,1,13,9,7,11,2,6,14 };
+                auto mask = masks[cp - 0x2596];
+                auto bit = [&](auto n){ return (mask >> n) & 1; };
+                return { (bit(0)+bit(1))*128, (bit(2)+bit(3))*128 };
+            }
+            if (cp == 0x2580) return { 256,0 }; // Upper half.
+            if (cp >= 0x2581 && cp <= 0x2588) // Lower eighths, including full block.
+            {
+                auto height = (si32)(cp - 0x2580);
+                return { std::max(0,height-4)*64, std::min(4,height)*64 };
+            }
+            if (cp >= 0x2589 && cp <= 0x258F) // Left eighths.
+            {
+                auto width = (si32)(0x2590 - cp);
+                return { width*32, width*32 };
+            }
+            if (cp == 0x2590) return { 128,128 }; // Right half.
+            if (cp >= 0x2591 && cp <= 0x2593) // Shades.
+            {
+                auto coverage = (si32)(cp - 0x2590)*64;
+                return { coverage,coverage };
+            }
+            if (cp == 0x2594) return { 64,0 }; // Upper eighth.
+            if (cp == 0x2595) return { 32,32 }; // Right eighth.
+            return { -1,-1 };
+        }
+        // cell: Sample physical half-cell colours, respecting SGR inversion.
+        // Use the dominant colour for an exposed edge; area averages for blur.
+        auto block_halves(bool dominant = false) const -> std::pair<argb, argb>
+        {
+            auto [upper, lower] = block_coverage();
+            auto bg = st.inv() ? uv.fg : uv.bg;
+            auto fg = st.inv() ? uv.bg : uv.fg;
+            auto sample = [&](si32 coverage)
+            {
+                if (coverage < 0) return bg;
+                if (dominant && coverage != 128) return coverage > 128 ? fg : bg;
+                return argb::transit(bg, fg, coverage);
+            };
+            return { sample(upper), sample(lower) };
+        }
+        // cell: Underlying colour when a translucent glyph replaces block art.
+        // A half-block overlay retains the opposite physical half of the image.
+        auto overlay_background(cell const& src) const -> argb
+        {
+            auto cp = utf::to_code(src.gc.get());
+            auto [upper, lower] = block_halves(cp == 0x2580 || cp == 0x2584);
+            if (cp == 0x2580) return lower;
+            if (cp == 0x2584) return upper;
+            return argb::transit(upper, lower, 128);
+        }
         // cell: Blend two cells according to visibility and other attributes (keep underlying image).
         auto& fuse_keep_image(cell const& c)
         {
+            // Preserve the original detailed glyph for colour-only overlays.
+            // Rebase only when a translucent replacement would discard its ink.
+            if (c.st.xy() && !c.raw() && !raw() && !c.st.inv() && c.uv.bg.chan.a < 255 && !c.gc.is_null()
+             && c.gc != gc && block_coverage().first >= 0)
+            {
+                auto [upper, lower] = block_halves(true);
+                auto cp = utf::to_code(c.gc.get());
+                auto background = overlay_background(c);
+                if (cp == 0x2580) uv.fg = upper;
+                if (cp == 0x2584) uv.fg = lower;
+                uv.bg = background;
+                st.inv(false);
+            }
             if (uv.fg.chan.a == 0xFF) uv.fg.mix_one(c.uv.fg);
             else                      uv.fg.mix(c.uv.fg);
 
@@ -2557,8 +2637,14 @@ namespace netxs
             }
         }
         // cell: Blend two cells and set id if any (fg = bg * c.fg).
-        void overlay(cell const& c)
+        void overlay(cell const& c, bool sample_blocks = true)
         {
+            if (sample_blocks && !raw() && !c.raw() && !c.st.inv() && c.uv.bg.chan.a < 255
+             && block_coverage().first >= 0)
+            {
+                uv.bg = overlay_background(c);
+                st.inv(false);
+            }
             uv.fg = uv.bg;
             if (uv.bg.chan.a == 0xFF)
             {
@@ -3357,6 +3443,11 @@ namespace netxs
                 inline void operator () (D& dst, S src) const
                 {
                     if (src.isnul()) return;
+                    if (!dst.raw() && dst.inv() && dst.block_coverage().first >= 0)
+                    {
+                        dst.reverse();
+                        dst.inv(false);
+                    }
                     if (!src.inv())
                     {
                         if (src.fgc().chan.a == 0x00)
@@ -3370,7 +3461,7 @@ namespace netxs
                             }
                             else
                             {
-                                auto dst_bgc = dst.bgc();
+                                auto dst_bgc = dst.block_coverage().first >= 0 ? dst.overlay_background(src) : dst.bgc();
                                 if (dst_bgc.chan.a < 2) dst.fgc(0xFFffffff);
                                 else                    dst.fgc(invert(dst_bgc));
                             }

@@ -348,6 +348,7 @@ namespace netxs::app::shared
                 //});
                 closing_on_quit(boss);
                 boss.base::property("applet.zorder", zpos::backmost);
+                boss.base::property("applet.region_hidden", false) = appcfg.cmd == "@invisible";
                 boss.LISTEN(tier::release, e2::render::background::prerender, parent_canvas)
                 {
                     auto title_fg_color = argb{ 0xFFffffff };
@@ -360,7 +361,7 @@ namespace netxs::app::shared
                 boss.LISTEN(tier::release, e2::form::upon::vtree::attached, parent_ptr, -, (cmd = appcfg.cmd))
                 {
                     auto& parent = *parent_ptr;
-                    closing_by_gesture(parent);
+                    if (cmd != "@invisible") closing_by_gesture(parent);
 
                     if (cmd.starts_with("@"))
                     {

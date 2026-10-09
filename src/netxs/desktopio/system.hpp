@@ -5756,7 +5756,10 @@ namespace netxs::os
                                 {
                                     if (len > 3 && s[2] == '<') t = type::mouse;
                                 }
-                                else if (os::dtvt::vtmode & ui::console::vt_KKP && "u~ABCDEFHPQS"s.find(c) != text::npos) // KKP
+                                // kmscon can send PrintScreen through CSI-u without KKP negotiation.
+                                // Decode that key explicitly while preserving legacy handling for other keys.
+                                else if ((os::dtvt::vtmode & ui::console::vt_KKP && "u~ABCDEFHPQS"s.find(c) != text::npos)
+                                      || (c == 'u' && (s.starts_with("\033[57361;") || s.starts_with("\033[57361u"))))
                                 {
                                     t = type::kkp;
                                 }
@@ -5964,6 +5967,11 @@ namespace netxs::os
                         { "\033[21~"  , { "",     key::F10                                             }},
                         { "\033[23~"  , { "",     key::F11                                             }},
                         { "\033[24~"  , { "",     key::F12                                             }},
+                        // kmscon workspace shortcut transport.
+                        { "\033\033[31~", { "", key::Key1 | ((mods::LCtrl | mods::LAlt) << key::idbits) }},
+                        { "\033\033[32~", { "", key::Key2 | ((mods::LCtrl | mods::LAlt) << key::idbits) }},
+                        { "\033\033[33~", { "", key::Key3 | ((mods::LCtrl | mods::LAlt) << key::idbits) }},
+                        { "\033\033[34~", { "", key::Key4 | ((mods::LCtrl | mods::LAlt) << key::idbits) }},
                         // Linux VGA Console special keys.
                         { "\033[1~"   , { "",     key::KeyHome                                         }},
                         { "\033[4~"   , { "",     key::KeyEnd                                          }},
@@ -6328,6 +6336,22 @@ namespace netxs::os
                                 timeout = waitio;
                                 //log("E. timeout=", timeout);
                                 break;
+                            }
+                            // Reserved kmscon transport for Ctrl+Alt+1..4 (XKB F17..F20).
+                            if (cache.starts_with("\033\033[3"))
+                            {
+                                if (cache.size() < 6)
+                                {
+                                    timeout = waitio;
+                                    break;
+                                }
+                                if (cache[4] >= '1' && cache[4] <= '4' && cache[5] == '~')
+                                {
+                                    auto sequence = cache.substr(0, 6);
+                                    cache.remove_prefix(6);
+                                    detect_key(sequence);
+                                    continue;
+                                }
                             }
                             auto [t, s, incomplete] = take_sequence(cache);
                             if (incomplete)

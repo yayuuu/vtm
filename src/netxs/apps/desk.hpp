@@ -20,6 +20,10 @@ namespace netxs::app::desk
         text   footer{};
         twod  winsize{};
         twod  wincoor{};
+        bool wincoor_relative{};
+        bool wincoor_centered{};
+        bool wincoor_cascade{};
+        bool fit_viewport{};
         si32  winform{};
         bool splitter{};
         eccc   appcfg{};
@@ -155,6 +159,8 @@ namespace netxs::app::desk
                     });
                     boss.LISTEN(tier::release, desk::events::ui::activate, gear) // Set unique focus.
                     {
+                        gear.owner.base::property<id_t>("workspace.gear") = gear.id;
+                        gear.owner.base::signal(tier::release, e2::form::layout::jumpto, window);
                         window.base::riseup(tier::preview, e2::form::layout::expose);
                         if (window.hidden) // Restore if minimized.
                         {
@@ -312,6 +318,65 @@ namespace netxs::app::desk
                     ->setpad({ 0, 0, tall, tall }, { 0, 0, -tall, 0 })
                     ->template plugin<pro::notes>(obj_note);
             }
+            else if (conf.type == "site" && conf.appcfg.cmd == "@invisible")
+            {
+                auto block_ptr = ui::list::ctor();
+                block_ptr->attach(ui::item::ctor(obj_desc))->setpad({ 0, 0, tall, tall });
+                auto row_ptr = block_ptr->attach(ui::list::ctor(axis::X))
+                    ->setpad({ 1, 0, 0, 0 }) // Space belongs to the row, outside the workspace buttons.
+                    ->template plugin<pro::focus>();
+                auto add_workspace = [row_ptr](auto model_ptr)
+                {
+                    auto window_ptr = model_ptr->base::template property<ui::wptr>("window.wptr").lock();
+                    if (!window_ptr) return;
+                    auto number = std::to_string(row_ptr->base::subset.size() + 1);
+                    auto button_ptr = row_ptr->attach(ui::item::ctor("[" + number + "]"))
+                        ->setpad({}, { 0, 1, 0, 0 }) // Inactive space between adjacent buttons.
+                        ->active()
+                        ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_app_label)
+                        ->template plugin<pro::keybd>()
+                        ->shader(cell::shaders::xlight, e2::form::state::hover)
+                        ->shader(cell{ skin::globals().winfocus }, e2::form::state::focus::count);
+                    button_ptr->depend(window_ptr);
+                    button_ptr->invoke([window_wptr = ui::wptr{ window_ptr }, workspace_id = window_ptr->id](auto& boss)
+                    {
+                        // Workspace selection belongs to the gate, not to keyboard focus.
+                        boss.LISTEN(tier::release, e2::postrender, canvas, -, (workspace_id))
+                        {
+                            auto owner_id = boss.base::riseup(tier::request, desk::events::ui::id);
+                            if (auto gate = boss.base::template getref<ui::base>(owner_id))
+                            {
+                                if (gate->base::template property<id_t>("workspace.active", 0) == workspace_id)
+                                {
+                                    auto color = skin::globals().focused;
+                                    // Recolor the rendered label without replacing its glyphs.
+                                    canvas.fill([&](cell& c){ c.blend(color); });
+                                }
+                            }
+                        };
+                        boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
+                        {
+                            boss.base::signal(tier::release, desk::events::ui::activate, gear);
+                            gear.dismiss(true);
+                        });
+                        boss.LISTEN(tier::release, desk::events::ui::activate, gear, -, (window_wptr))
+                        {
+                            if (auto window = window_wptr.lock())
+                            {
+                                gear.owner.base::property<id_t>("workspace.gear") = gear.id;
+                                gear.owner.base::signal(tier::release, e2::form::layout::jumpto, *window);
+                            }
+                        };
+                    });
+                };
+                for (auto& model_ptr : menumodel_item.subset) add_workspace(model_ptr);
+                menumodel_item.LISTEN(tier::release, desk::events::apps::created, model_ptr, block_ptr->sensors, (add_workspace, row_ptr))
+                {
+                    add_workspace(model_ptr);
+                    row_ptr->base::reflow();
+                };
+                menuitem_ptr = block_ptr;
+            }
             else
             {
                 auto head_fork_ptr = ui::fork::ctor(axis::X, 0, 1, 0);
@@ -360,6 +425,17 @@ namespace netxs::app::desk
                         });
                         boss.LISTEN(tier::release, desk::events::ui::activate, gear, -, (inst_id))
                         {
+                            if (conf.type == "site" && (conf.appcfg.cmd == "fixed" || conf.appcfg.cmd == "@invisible"))
+                            {
+                                for (auto& model : menumodel_item.subset)
+                                {
+                                    if (auto window = model->base::template property<ui::wptr>("window.wptr").lock())
+                                    {
+                                        gear.owner.base::signal(tier::release, e2::form::layout::jumpto, *window);
+                                        return;
+                                    }
+                                }
+                            }
                             boss.base::signal(tier::anycast, desk::events::ui::selected, inst_id);
                             static auto offset = dot_00; // static: Share initial offset between all instances.
                             auto current_viewport = gear.owner.base::signal(tier::request, e2::form::prop::viewport);
@@ -646,6 +722,7 @@ namespace netxs::app::desk
                 return users;
             };
 
+            auto& panel_height = desklayout_ptr->base::field(panel_cmd.size() ? std::max(1, panel_top) : 0);
             auto& size_config = desklayout_ptr->base::field(std::tuple{ menu_max_conf, menu_min_conf, faux });
             //todo Apple Clang don't get it.
             //auto& [menu_max_size, menu_min_size, active] = size_config;
@@ -686,12 +763,12 @@ namespace netxs::app::desk
                     };
                     boss.LISTEN(tier::release, e2::area, new_area)
                     {
-                        auto viewport = new_area - dent{ menu_min_size };
+                        auto viewport = new_area - dent{ menu_min_size, 0, panel_height, 0 };
                         boss.base::riseup(tier::release, e2::form::prop::viewport, viewport);
                     };
                     parent.LISTEN(tier::request, e2::form::prop::viewport, viewport, boss.relyon)
                     {
-                        viewport -= dent{ menu_min_size };
+                        viewport -= dent{ menu_min_size, 0, panel_height, 0 };
                     };
                     boss.LISTEN(tier::request, desk::events::ui::id, owner_id, boss.relyon)
                     {
@@ -751,7 +828,9 @@ namespace netxs::app::desk
                 ->plugin<pro::keybd>()
                 ->plugin<pro::timer>()
                 ->plugin<pro::acryl>()
-                ->plugin<pro::cache>()
+                // Acrylic already samples the background. Keep the original
+                // compositor here so wallpaper ink cannot bypass its blur.
+                ->plugin<pro::cache>(true, false)
                 ->active(menu_bg_color)
                 ->invoke([&](auto& boss)
                 {
@@ -948,7 +1027,8 @@ namespace netxs::app::desk
                     };
                 });
             bttns_cake->attach(app::shared::underlined_hz_scrollbar(bttns_area));
-            auto bttns = bttns_area->attach(ui::fork::ctor(axis::X))
+            auto logout_only = config.settings::take("/config/desktop/taskbar/logout_only", false);
+            auto bttns = bttns_area->attach(ui::fork::ctor(axis::X, 0, 1, logout_only ? 0 : 1))
                 ->limits(bttn_min_size, bttn_max_size);
             auto disconnect_park_ptr = bttns->attach(slot::_1, ui::cake::ctor())
                 ->active()
@@ -956,7 +1036,7 @@ namespace netxs::app::desk
                 ->template plugin<pro::keybd>()
                 ->shader(c3, e2::form::state::focus::count)
                 ->shader(cell::shaders::xlight, e2::form::state::hover)
-                ->plugin<pro::notes>(skin::globals().NsDisconnect_tooltip)
+                ->plugin<pro::notes>(logout_only ? config.settings::take("/config/desktop/taskbar/logout_tooltip", " Close desktop session "s) : skin::globals().NsDisconnect_tooltip)
                 ->invoke([&, name = text{ username_view }](auto& boss)
                 {
                     boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
@@ -964,48 +1044,65 @@ namespace netxs::app::desk
                         boss.base::signal(tier::release, desk::events::ui::activate, gear);
                         gear.dismiss(true);
                     });
-                    boss.LISTEN(tier::release, desk::events::ui::activate, gear, -, (name))
+                    boss.LISTEN(tier::release, desk::events::ui::activate, gear, -, (name, logout_only))
                     {
-                        log("%%User %name% disconnected", prompt::desk, name);
-                        gear.owner.base::signal(tier::preview, e2::conio::quit);
-                    };
-                });
-            auto& disconnect_park = *disconnect_park_ptr;
-            auto disconnect = disconnect_park.attach(ui::item::ctor(skin::globals().NsDisconnect_label))
-                ->setpad({ 1 + tall, 1 + tall, tall, tall })
-                ->alignment({ snap::head, snap::center });
-            auto shutdown_park = bttns->attach(slot::_2, ui::cake::ctor())
-                ->active()
-                ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_ui_button)
-                ->template plugin<pro::keybd>()
-                ->shader(c1, e2::form::state::focus::count)
-                ->shader(c1, e2::form::state::hover)
-                ->shader(cA, e2::form::state::accesslock::count, world_ptr)
-                ->plugin<pro::notes>(skin::globals().NsShutdown_tooltip)
-                ->invoke([&](auto& boss)
-                {
-                    boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
-                    {
-                        boss.base::signal(tier::release, desk::events::ui::activate, gear);
-                        gear.dismiss(true);
-                    });
-                    boss.LISTEN(tier::release, desk::events::ui::activate, gear)
-                    {
-                        world.base::signal(tier::release, e2::shutdown::bygear, gear);
-                        if (!world.bell::accomplished())
+                        if (logout_only)
                         {
-                            auto accesslock_list = world.base::signal(tier::request, e2::form::state::accesslock::enlist);
-                            if (accesslock_list.size())
-                            if (auto accesslocked_window_ptr = accesslock_list.front())
+                            world.base::signal(tier::release, e2::shutdown::bygear, gear);
+                            if (!world.bell::accomplished())
                             {
-                                gear.owner.base::signal(tier::release, e2::form::layout::jumpto, *accesslocked_window_ptr);
+                                auto accesslock_list = world.base::signal(tier::request, e2::form::state::accesslock::enlist);
+                                if (accesslock_list.size())
+                                if (auto accesslocked_window_ptr = accesslock_list.front())
+                                    gear.owner.base::signal(tier::release, e2::form::layout::jumpto, *accesslocked_window_ptr);
                             }
+                        }
+                        else
+                        {
+                            log("%%User %name% disconnected", prompt::desk, name);
+                            gear.owner.base::signal(tier::preview, e2::conio::quit);
                         }
                     };
                 });
-            auto shutdown = shutdown_park->attach(ui::item::ctor(skin::globals().NsShutdown_label))
+            auto& disconnect_park = *disconnect_park_ptr;
+            auto disconnect = disconnect_park.attach(ui::item::ctor(logout_only ? config.settings::take("/config/desktop/taskbar/logout_label", "Logout"s) : skin::globals().NsDisconnect_label))
                 ->setpad({ 1 + tall, 1 + tall, tall, tall })
-                ->alignment({ snap::tail, snap::center });
+                ->alignment({ snap::head, snap::center });
+            if (!logout_only)
+            {
+                auto shutdown_park = bttns->attach(slot::_2, ui::cake::ctor())
+                    ->active()
+                    ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_ui_button)
+                    ->template plugin<pro::keybd>()
+                    ->shader(c1, e2::form::state::focus::count)
+                    ->shader(c1, e2::form::state::hover)
+                    ->shader(cA, e2::form::state::accesslock::count, world_ptr)
+                    ->plugin<pro::notes>(skin::globals().NsShutdown_tooltip)
+                    ->invoke([&](auto& boss)
+                    {
+                        boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
+                        {
+                            boss.base::signal(tier::release, desk::events::ui::activate, gear);
+                            gear.dismiss(true);
+                        });
+                        boss.LISTEN(tier::release, desk::events::ui::activate, gear)
+                        {
+                            world.base::signal(tier::release, e2::shutdown::bygear, gear);
+                            if (!world.bell::accomplished())
+                            {
+                                auto accesslock_list = world.base::signal(tier::request, e2::form::state::accesslock::enlist);
+                                if (accesslock_list.size())
+                                if (auto accesslocked_window_ptr = accesslock_list.front())
+                                {
+                                    gear.owner.base::signal(tier::release, e2::form::layout::jumpto, *accesslocked_window_ptr);
+                                }
+                            }
+                        };
+                    });
+                auto shutdown = shutdown_park->attach(ui::item::ctor(skin::globals().NsShutdown_label))
+                    ->setpad({ 1 + tall, 1 + tall, tall, tall })
+                    ->alignment({ snap::tail, snap::center });
+            }
 
             taskbar_grips.invoke([&](auto& boss)
             {

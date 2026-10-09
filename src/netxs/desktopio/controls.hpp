@@ -1019,7 +1019,50 @@ namespace netxs::ui
                         if (auto gear_ptr = g.gear_wptr.lock())
                         {
                             auto& gear = *(std::static_pointer_cast<hids>(gear_ptr));
-                            g.draw(canvas, area, cell::shaders::xlight[1 + gear.pressed_count]);
+                            auto fx = cell::shaders::xlight[1 + gear.pressed_count];
+                            if (!boss.base::property("window.half_edges", false)) g.draw(canvas, area, fx);
+                            else
+                            {
+                                auto window = canvas.full();
+                                auto [side_x, side_y] = g.layout(area);
+                                auto draw_half_edge = [&](rect edge)
+                                {
+                                    edge = edge.trim(canvas.core::area());
+                                    for (auto y = edge.coor.y; y < edge.coor.y + edge.size.y; ++y)
+                                    for (auto x = edge.coor.x; x < edge.coor.x + edge.size.x; ++x)
+                                    {
+                                        auto& c = canvas[twod{ x,y } - canvas.core::coor()];
+                                        if (y == window.coor.y - 1)
+                                        {
+                                            // The outer top grip straddles two cells:
+                                            // lower half above, upper transparent half
+                                            // at the window. No highlight on the bar.
+                                            auto [upper, lower] = c.block_halves(true);
+                                            lower.xlight(1 + gear.pressed_count);
+                                            c.txt("▄"sv).inv(false).bgc(upper).fgc(lower);
+                                        }
+                                        else if (y == window.coor.y
+                                              && x >= window.coor.x && x < window.coor.x + window.size.x)
+                                        {
+                                            auto [upper, lower] = c.block_halves(true);
+                                            upper.xlight(1 + gear.pressed_count);
+                                            c.txt("▄"sv).inv(false).bgc(upper).fgc(lower); // Preserve the visible lower half.
+                                        }
+                                        else if (!c.raw() && c.block_coverage().first >= 0)
+                                        {
+                                            // A full-cell grip can retain every
+                                            // sextant/quarter pixel. Shade each
+                                            // colour independently so unused ink
+                                            // cannot choose the contrast direction.
+                                            c.fgc().xlight(1 + gear.pressed_count);
+                                            c.bgc().xlight(1 + gear.pressed_count);
+                                        }
+                                        else fx(c);
+                                    }
+                                };
+                                draw_half_edge(side_x);
+                                draw_half_edge(side_y);
+                            }
                         }
                     });
                 };
@@ -1048,6 +1091,7 @@ namespace netxs::ui
                 };
                 boss.on(tier::mouserelease, input::key::MouseMove, memo, [&](hids& gear)
                 {
+                    if (!alive) return;
                     auto& g = gears.take(gear);
                     if (g.zoomon && !gear.meta(mods::anyCtrl))
                     {
@@ -1071,6 +1115,7 @@ namespace netxs::ui
                 boss.base::signal(tier::release, e2::form::draggable::_<Button>, true);
                 boss.LISTEN(tier::release, e2::form::drag::start::_<Button>, gear, memo)
                 {
+                    if (!alive) return;
                     auto area = boss.base::area();
                     auto coor = area.coor + gear.coord;
                     if (gears.take(gear).grab(area, coor, outer))
@@ -1665,11 +1710,13 @@ namespace netxs::ui
                 head_size = new_size;
                 foot_size = new_size;
                 if (head_live) recalc(head_page, head_size);
+                else head_size.y = 0;
                 if (foot_live)
                 {
                     recalc(foot_page, foot_size);
                     if (foot_text.empty()) foot_size.y = 0;
                 }
+                else foot_size.y = 0;
             }
             void header(view newtext)
             {
@@ -1680,7 +1727,8 @@ namespace netxs::ui
             {
                 foot_text = newtext;
                 foot_page = foot_text;
-                recalc(foot_page, foot_size);
+                if (foot_live) recalc(foot_page, foot_size);
+                else foot_size.y = 0;
                 boss.base::signal(tier::release, e2::form::prop::ui::footer, foot_text);
             }
             void rebuild()
@@ -2883,7 +2931,7 @@ namespace netxs::ui
 
         public:
             cache(base&&) = delete;
-            cache(base& boss, bool rendered = true)
+            cache(base& boss, bool rendered = true, bool sample_blocks = true)
                 : skill{ boss },
                   usecache{ true },
                   lucidity{ 0xFF }
@@ -2914,7 +2962,7 @@ namespace netxs::ui
                 };
                 if (rendered)
                 {
-                    boss.LISTEN(tier::release, e2::render::background::prerender, parent_canvas, memo)
+                    boss.LISTEN(tier::release, e2::render::background::prerender, parent_canvas, memo, (sample_blocks))
                     {
                         if (!usecache) return;
                         if (boss.base::ruined())
@@ -2925,8 +2973,11 @@ namespace netxs::ui
                         }
                         auto full = parent_canvas.full();
                         bosscopy.move(full.coor);
-                        if (lucidity == 0xFF) parent_canvas.fill(bosscopy, cell::shaders::overlay);
-                        else                  parent_canvas.fill(bosscopy, cell::shaders::transparent(lucidity));
+                        if (lucidity == 0xFF)
+                        {
+                            parent_canvas.fill(bosscopy, [&](auto& dst, auto& src){ dst.overlay(src, sample_blocks); });
+                        }
+                        else parent_canvas.fill(bosscopy, cell::shaders::transparent(lucidity));
                         bosscopy.move(dot_00);
                         boss.bell::expire();
                     };
