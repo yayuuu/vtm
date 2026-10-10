@@ -649,6 +649,7 @@ namespace netxs::app::vtm
                 auto integrated_title = what.applet->base::property("applet.integrated_header", false);
                 auto half_header = integrated_title && bell::indexer.config.settings::take("/config/terminal/menu/half_edges", false);
                 auto& cropped_header = base::property("window.cropped_header", false);
+                auto& compact_frame = base::property("window.maximized", false);
                 base::property("window.half_edges", false) = half_header;
                 auto& title = base::plugin<pro::title>(what.applet->base::property("applet.header"), what.applet->base::property("applet.footer"), true, !integrated_title, !integrated_title);
                 if (integrated_title)
@@ -675,7 +676,7 @@ namespace netxs::app::vtm
                     {
                         auto point = twod{ gear.coord };
                         auto first = base::size().x - 15;
-                        auto control = controls_hover && point.y >= (cropped_header ? 1 : 0) && point.y < 3
+                        auto control = controls_hover && point.y >= (cropped_header ? 1 : 0) && point.y < (compact_frame ? 1 : 3)
                                                     && point.x >= std::max(0, first) && point.x < base::size().x
                                      ? (point.x - first) / 5 : -1;
                         if (std::exchange(hovered_control, control) != control) base::deface();
@@ -690,7 +691,7 @@ namespace netxs::app::vtm
                     {
                         auto area = parent_canvas.full();
                         if (cropped_header) parent_canvas.clip(parent_canvas.clip().trim(area - dent{ 0,0,1,0 }));
-                        auto size = twod{ area.size.x, std::min(3, area.size.y) };
+                        auto size = twod{ area.size.x, std::min(compact_frame ? 1 : 3, area.size.y) };
                         header_back.size(size);
                         header_blur.size({ size.x + 12, size.y * 2 + 12 });
                         for (auto y = 0; y < size.y; ++y)
@@ -745,7 +746,7 @@ namespace netxs::app::vtm
                         auto tint = skin::color(tone::winfocus).bgc();
                         auto& hover = header_hover;
                         hover.assign(size.x, argb{});
-                        if (controls_hover && hovered_control >= 0 && size.y == 3)
+                        if (controls_hover && hovered_control >= 0)
                         {
                             auto first = size.x - 15 + hovered_control * 5;
                             auto colour = hovered_control == 2 ? argb{ 0xFFFF3030 } : argb{ 0xFFFFFFFF };
@@ -777,7 +778,7 @@ namespace netxs::app::vtm
                         }
                         // Extend the bottom edge into the side padding, composing
                         // each column against its own desktop pixels, like the header.
-                        if (area.size.x > 2 && area.size.y > 3)
+                        if (!compact_frame && area.size.x > 2 && area.size.y > 3)
                         {
                             auto left = area.coor + twod{ 0,area.size.y-1 } - parent_canvas.core::coor();
                             for (auto x = 0; x < area.size.x; ++x)
@@ -1023,6 +1024,8 @@ namespace netxs::app::vtm
                         // Stop watching geometry before restoring it: this is not a drag.
                         maximize_token.clear();
                         cropped_header = false;
+                        compact_frame = false;
+                        base::broadcast(tier::anycast, e2::form::prop::window::state, winstate::normal);
                         base::signal(tier::release, e2::config::plugins::sizer::alive, true);
                         if (saved_area)
                         {
@@ -1032,7 +1035,7 @@ namespace netxs::app::vtm
                         }
                     }
                 };
-                LISTEN(tier::preview, e2::form::size::enlarge::maximize, gear, -, (half_header))
+                LISTEN(tier::preview, e2::form::size::enlarge::maximize, gear, -, (integrated_title))
                 {
                     auto viewport = gear.owner.base::signal(tier::request, e2::form::prop::viewport);
                     auto recalc = [&](auto viewport)
@@ -1045,9 +1048,7 @@ namespace netxs::app::vtm
                             auto b = title.foot_size.y;
                             new_area -= dent{ 0, 0, t, b };
                         }
-                        // Keep the child's three-row menu, clipping its first row at
-                        // the server. The text row starts exactly below the status bar.
-                        if (cropped_header) new_area += dent{ 0,0,1,0 };
+                        // Maximized terminals use a single title row and no padding.
                         if (base::area() != new_area)
                         {
                             applying_maximized_layout = true;
@@ -1073,7 +1074,9 @@ namespace netxs::app::vtm
                         saved_area = base::area();
                         saved_area.coor -= viewport.coor;
                         viewport_area = viewport;
-                        cropped_header = half_header;
+                        cropped_header = false;
+                        compact_frame = integrated_title;
+                        base::broadcast(tier::anycast, e2::form::prop::window::state, winstate::maximized);
                         base::signal(tier::release, e2::config::plugins::sizer::alive, false);
                         recalc(viewport);
                         gear.owner.LISTEN(tier::release, e2::form::prop::viewport, viewport, maximize_token, (recalc))

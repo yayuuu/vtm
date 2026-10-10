@@ -73,12 +73,13 @@ namespace netxs::app::terminal
     auto build_terminal = [](eccc appcfg, settings& config)
     {
         auto border = std::max(0, config.settings::take(attr::borders, 0));
-        auto borders = dent{
+        auto normal_borders = dent{
             std::max(0, config.settings::take("/config/terminal/padding/left", border)),
             std::max(0, config.settings::take("/config/terminal/padding/right", border)),
             std::max(0, config.settings::take("/config/terminal/padding/top", 0)),
             std::max(0, config.settings::take("/config/terminal/padding/bottom", 0)) };
         auto window = ui::cake::ctor();
+        auto& borders = window->base::field(normal_borders);
         window->base::property("applet.integrated_header", false) = config.settings::take("/config/terminal/menu/integrated_title", false);
         auto& window_clr = window->base::field(skin::color(tone::window_clr));
         auto& padding_clr = window->base::field(config.settings::take("/config/terminal/padding/color", cell{}.bgc(0xFF000000)));
@@ -106,7 +107,7 @@ namespace netxs::app::terminal
             ->invoke([&](auto& boss)
             {
                 if (borders)
-                boss.LISTEN(tier::release, e2::render::background::any, parent_canvas, -, (borders)) // Shade left/right borders.
+                boss.LISTEN(tier::release, e2::render::background::any, parent_canvas) // Shade left/right borders.
                 {
                     auto full = parent_canvas.full();
                     parent_canvas.cage(full, borders, [&](cell& c){ c.fuse(padding_clr).txt(whitespace); });
@@ -315,7 +316,7 @@ namespace netxs::app::terminal
                 winsz = new_area.size;
                 check_state(boss);
             };
-            boss.LISTEN(tier::release, e2::render::any, parent_canvas, -, (borders))
+            boss.LISTEN(tier::release, e2::render::any, parent_canvas)
             {
                 auto full = parent_canvas.full();
                 if (winsz.y != 1 && borders)
@@ -326,6 +327,21 @@ namespace netxs::app::terminal
                 auto term_bgc = term_inv ? term_clr.fgc() : term_clr.bgc();
                 auto bgc = winsz.y != 1 ? term_bgc : 0;
                 parent_canvas.fill(full, [&](cell& c){ c.fgc(c.bgc()).bgc(bgc).txt(bar).link(bar); });
+            };
+        });
+        auto normal_slim = config.settings::take("menu/slim", true);
+        window->invoke([&](auto& boss)
+        {
+            auto& compact = boss.base::field(false);
+            boss.LISTEN(tier::anycast, e2::form::prop::window::state, state, -, (normal_borders, normal_slim, term_stat_area, hz, slot1))
+            {
+                auto next = state == winstate::maximized;
+                if (std::exchange(compact, next) == next) return;
+                borders = next ? dent{} : normal_borders;
+                term_stat_area->setpad(borders);
+                hz->limits({ -1, next ? 0 : 1 }, { -1, next ? 0 : 1 });
+                slot1->base::broadcast(tier::anycast, e2::form::prop::ui::slimmenu, next || normal_slim);
+                boss.reflow();
             };
         });
         term->invoke([&](auto& boss)

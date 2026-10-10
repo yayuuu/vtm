@@ -71,6 +71,7 @@ namespace netxs
         static constexpr auto zorder          = __COUNTER__ - _counter;
         static constexpr auto warpwindow      = __COUNTER__ - _counter;
         static constexpr auto accesslock      = __COUNTER__ - _counter;
+        static constexpr auto windowstate     = __COUNTER__ - _counter; // Notify child of its host window state.
     };
     struct winstate
     {

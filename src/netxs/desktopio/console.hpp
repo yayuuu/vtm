@@ -328,6 +328,12 @@ namespace netxs::ui
             {
                 owner.base::enqueue([&, gui_cmd = lock.thing](auto& /*boss*/) mutable
                 {
+                    if (gui_cmd.cmd_id == syscmd::windowstate && gui_cmd.args.size() == 1)
+                    {
+                        auto state = netxs::any_get_or(gui_cmd.args[0], winstate::normal);
+                        owner.base::broadcast(tier::anycast, e2::form::prop::window::state, state);
+                        return;
+                    }
                     auto ext_gear_id = gui_cmd.gear_id;
                     if (auto gear_ptr = owner.get_int_gear_ptr(ext_gear_id)) // Notify oneshot requesters.
                     {

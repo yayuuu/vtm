@@ -553,6 +553,10 @@ namespace netxs::app::shared
                     {
                         auto& item_props = boss.base::field(std::move(props));
                         setup(boss, item_props);
+                        boss.LISTEN(tier::anycast, e2::form::prop::ui::slimmenu, slim)
+                        {
+                            boss.setpad({ 0, 0, !slim, !slim });
+                        };
                     });
                 return button;
             };
@@ -692,6 +696,12 @@ namespace netxs::app::shared
             menuveer->limits({ -1, slimsize ? 1 : 3 }, { -1, slimsize ? 1 : 3 })
                 ->invoke([&](auto& boss)
                 {
+                    boss.LISTEN(tier::anycast, e2::form::prop::ui::slimmenu, slim)
+                    {
+                        auto height = slim ? 1 : 3;
+                        boss.base::limits({ -1, height }, { -1, height });
+                        boss.reflow();
+                    };
                     if (autohide)
                     {
                         auto menutent_shadow = ptr::shadow(menutent);

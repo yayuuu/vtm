@@ -11475,6 +11475,8 @@ namespace netxs::ui
             {
                 owner.base::enqueue([&](auto& /*boss*/)
                 {
+                    // A child may finish starting after its window was maximized.
+                    s11n::gui_command.send(owner, 0, syscmd::windowstate, many{ owner.window_state });
                     owner.base::riseup(tier::release, e2::form::global::sysstart, 1);
                 });
             }
@@ -11536,6 +11538,7 @@ namespace netxs::ui
         si32 digest; // dtvt: Bitmap's update serial number.
         face splash; // dtvt: "No signal" splash.
         page errmsg; // dtvt: Overlay error message.
+        si32 window_state = winstate::normal; // dtvt: Host decoration/layout state.
         vtty ipccon; // dtvt: IPC connector. Should be destroyed first.
 
         // dtvt: Format error message overlay.
@@ -11793,6 +11796,11 @@ namespace netxs::ui
             LISTEN(tier::anycast, e2::form::prop::cwd, path)
             {
                 stream.cwd.send(*this, path);
+            };
+            LISTEN(tier::anycast, e2::form::prop::window::state, state)
+            {
+                window_state = state;
+                if (ipccon) stream.gui_command.send(*this, 0, syscmd::windowstate, many{ state });
             };
             LISTEN(tier::release, e2::area, new_area)
             {
