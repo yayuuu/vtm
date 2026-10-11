@@ -62,8 +62,8 @@ R"==(<include*/>  <!-- Ordered list of <include="/path/to/settings.xml"/>. Clear
         <format="html"/>  <!-- Default clipboard format for captures: "text" | "ansi" | "rich" | "html" | "protected". -->
     </clipboard>
     <colors>  <!-- Along with fgc, bgc, and txt, other SGR attributes (boolean) are supported: itc (italic), bld (bold), und (underline), inv (reverse), ovr (overline), and blk (blink). -->
-        <window   fgc=whitelt   bgc= #404040          />  <!-- Background color for unfocused windows. -->
-        <focus    fgc=purewhite bgc= #3A528E          />  <!-- Background color for focused windows. -->
+        <window   fgc=whitelt   bgc= #20202060        />  <!-- Translucent background for unfocused windows. -->
+        <focus    fgc=purewhite bgc= #20202060        />  <!-- Translucent background for focused windows. -->
         <brighter fgc=purewhite bgc=purewhite alpha=60/>  <!-- Highlights (used for brightening UI elements). -->
         <shadower               bgc= #202020B4        />  <!-- Shadows (used for dimming UI elements). -->
         <warning  fgc=whitelt   bgc=yellowdk          />  <!-- Warning state color. -->
@@ -92,45 +92,44 @@ R"==(<include*/>  <!-- Ordered list of <include="/path/to/settings.xml"/>. Clear
 )=="
 R"==(
     <desktop>  <!-- Desktop client settings. -->
+        <window_inertia=false/>  <!-- Stop a dragged window when the mouse is released. -->
+        <viewport_drag=false/>   <!-- Navigate with workspaces instead of dragging the desktop. -->
         <viewport coor=0,0/>  <!-- Initial viewport position for the first connected user. During runtime, this value is temporarily updated with the last disconnected user's coordinates to restore their session view on reconnection. -->
         <windowmax=3000x2000/>  <!-- Maximum grid size (width x height) in text cells. -->
         <macstyle=false/>  <!-- Window control button placement. "0/no/false": right side (Windows-style); "1/yes/true": left side (macOS-style). -->
         <taskbar wide=false selected="Term">  <!-- Taskbar menu. "wide": toggle between wide or compact layout; "selected": ID of the initially selected menu item. -->
+            <logout_only=true/>
+            <logout_label="Logout"/>
+            <logout_tooltip=" Close desktop session "/>
             <item*/>  <!-- Clear all previously defined items to start a new list. -->
+            <item id="workspaces" label=" Workspaces " title="• " type="site" cmd="@invisible"/>
             <item splitter  label=/Ns/Taskbar/Apps/label tooltip=/Ns/Taskbar/Apps/tooltip/>
-            <item id="Term" label=/Ns/Taskbar/Terminal/label type="dtvt" title=/Ns/Taskbar/Terminal/title cmd="$0 -r term"            tooltip=/Ns/Taskbar/Terminal/tooltip/>
-            <item id="Tile" label=/Ns/Taskbar/Tile/label     type="tile" title=/Ns/Taskbar/Tile/title     cmd="h1:1(Term, Term)"      tooltip=/Ns/Taskbar/Tile/tooltip/>
+            <item id="Term" label=/Ns/Taskbar/Terminal/label type="term" title=/Ns/Taskbar/Terminal/title cmd="" wincoor_centered=true wincoor_cascade=true fit_viewport=true winsize="110:40" tooltip=/Ns/Taskbar/Terminal/tooltip/>
+            <item id="Tile" label=/Ns/Taskbar/Tile/label     type="tile" title=/Ns/Taskbar/Tile/title     cmd="h1:1(Term, Term)" wincoor_centered=true wincoor_cascade=true fit_viewport=true tooltip=/Ns/Taskbar/Tile/tooltip/>
             <item id="Site" label=/Ns/Taskbar/Site/label     type="site" title=/Ns/Taskbar/Site/title     cmd="@" winform="maximized" tooltip=/Ns/Taskbar/Site/tooltip/>  <!-- cmd="@" is a directive for auto-numbering instances. -->
-            <item id="Logs" label=/Ns/Taskbar/Logs/label     type="dtvt" title=/Ns/Taskbar/Logs/title     cmd="$0 -q -r term $0 -m"   tooltip=/Ns/Taskbar/Logs/tooltip>
+            <item id="Logs" label=/Ns/Taskbar/Logs/label     type="term" title=/Ns/Taskbar/Logs/title     cmd="$0 -m" wincoor_centered=true wincoor_cascade=true fit_viewport=true tooltip=/Ns/Taskbar/Logs/tooltip>
                 <config>
                     <terminal>
                         <scrollback>
                             <size=50000/>
                             <wrap=false/>
                         </scrollback>
-                        <menu item*>
-                            <autohide=/Menu/Defaults/autohide/>
-                            <slim=/Menu/Defaults/slim/>
-                            <item=/Menu/Buttons/AlwaysOnTop/>
-                            <item=/Menu/Buttons/LockAccess/>
-                            <item=/Menu/Buttons/FindPrev/>
-                            <item=/Menu/Buttons/FindNext/>
-                            <item=/Menu/Buttons/NoWrapMode/>
-                            <item=/Menu/Buttons/ClipboardFormat/>
-                            <item=/Menu/Buttons/ClearScrollback/>
-                        </menu>
                     </terminal>
                 </config>
             </item>
             <autorun run*>  <!-- List of menu items to launch automatically: -->
+                <run id="workspaces" winsize="210:64" wincoor="0:0"/>
+                <run id="workspaces" winsize="210:64" wincoor="0:100"/>
+                <run id="workspaces" winsize="210:64" wincoor="0:200"/>
+                <run id="workspaces" winsize="210:64" wincoor="0:300"/>
                 <!--  <run*/>             -->
                 <!--  <run id="Term" winsize=80,25  wincoor=92,31 winform="minimized" />  -->  <!-- Note: Autorun only supports the "minimized" value for winform. -->
                 <!--  <run id="Term" winsize=80,25  wincoor=8,31 />                       -->
                 <!--  <run id="Term" winsize=164,25 wincoor=8,4 focused />                -->
             </autorun>
             <width>  <!-- Taskbar width settings. -->
-                <folded=18/>
-                <expanded=41/>
+                <folded=19/>
+                <expanded=40/>
             </width>
             <timeout=250ms/>  <!-- Taskbar collapse delay after the mouse leaves. -->
             <colors>
@@ -148,7 +147,7 @@ R"==(
             <height=1/>  <!-- Reserved space at the top of the desktop. -->
         </panel>
         <background>  <!-- Desktop background settings. -->
-            <color fgc=whitedk bgc= #00004080/>  <!-- Desktop background color. -->
+            <color fgc=whitedk bgc= #101018FF/>  <!-- Desktop background color. -->
             <tile=""/>                           <!-- Optional: Truecolor ANSI-art for the background. -->
         </background>
     </desktop>
@@ -199,26 +198,27 @@ R"==(
             </names>
         </colors>
         <border=1/>  <!-- Terminal window left and right padding (border width). -->
+        <padding left=1 right=1 top=0 bottom=0><color bgc=pureblack/></padding>
         <tablen=8/>  <!-- Tab stop length. -->
         <menu item*>
-            <autohide=/Menu/Defaults/autohide/>
-            <slim=/Menu/Defaults/slim/>
-            <item=/Menu/Buttons/AlwaysOnTop/>
-            <item=/Menu/Buttons/LockAccess/>
-            <item=/Menu/Buttons/FindPrev/>
-            <item=/Menu/Buttons/FindNext/>
-            <item=/Menu/Buttons/ExclusiveKeyboard/>
-            <item=/Menu/Buttons/NoWrapMode/>
-            <item=/Menu/Buttons/ClipboardFormat/>
-            <item=/Menu/Buttons/StdioLog/>
-            <item=/Menu/Buttons/ClearScrollback/>
-            <item=/Menu/Buttons/Restart/>
+            <autohide=false/>
+            <slim=false/>
+            <integrated_title=true/>
+            <blur=true/>
+            <half_edges=true/>
+            <item id="WindowTitle" label=" Terminal ">
+                <script>
+                    <on="release:e2::form::upon::started" source="applet"/>
+                    <on="release:e2::form::prop::ui::header" source="applet"/>
+                    vtm.item.Label("  " .. vtm.applet.Title() .. "  "); vtm.item.Deface()
+                </script>
+            </item>
         </menu>
         <selection>
             <mode=/Terminal/selection/mode/>  <!-- Default clipboard copy format: "text", "ansi", "rich", "html", "protected", or "none". -->
             <rect=/Terminal/selection/rect/>  <!-- Preferred selection form: true (Rectangular/Block), false (Linear). -->
         </selection>
-        <atexit="auto"/>  <!-- Action to take after the last console process terminates:
+        <atexit="close"/>  <!-- Action to take after the last console process terminates:
                                 "auto":    Stay open and prompt if the exit code is non-zero (default).
                                 "ask":     Always stay open and prompt.
                                 "close":   Always close the window.
@@ -262,6 +262,11 @@ R"==(
             <script=RollFontsForward       on="Ctrl+Shift+F12"                   />
             <script=ResetWheelAccumulator  on="preview:-Ctrl"                    />
             <script=ToggleDebugOverlay     on="Space-Backspace | Backspace-Space"/>
+            <script="vtm.desktop.JumpWorkspace(1);" on="preview:Ctrl+Alt+1"/>
+            <script="vtm.desktop.JumpWorkspace(2);" on="preview:Ctrl+Alt+2"/>
+            <script="vtm.desktop.JumpWorkspace(3);" on="preview:Ctrl+Alt+3"/>
+            <script="vtm.desktop.JumpWorkspace(4);" on="preview:Ctrl+Alt+4"/>
+            <script="vtm.desktop.Run(); vtm.gear.SetHandled();" on="preview:Super+Enter"/>
         </gate>
 )==" // MSVC2022: C2026 String too big, trailing characters truncated.
 R"==(
@@ -271,7 +276,7 @@ R"==(
             <script=FocusNextWindow on="Ctrl+PageDown"/>
             <script=Disconnect      on="Shift+F7"     />
             <script=TryToQuit       on="preview:F10"  />
-            <script=RunApplication  on="Alt+Shift+N"  />
+            <script=RunApplication  on=""/>
             <script=RunInfoPage     on="Esc+I"        />
         </desktop>
         <taskbar=desktop script*>  <!-- Taskbar bindings ("=desktop": includes desktop-level bindings). -->
@@ -340,6 +345,7 @@ R"==(
 )==" // MSVC2022: C2026 String too big, trailing characters truncated.
 R"==(
         <terminal script*>  <!-- Terminal-specific bindings. -->
+            <script="vtm.terminal.ForwardKeys(); vtm.gear.SetHandled();" on="preview:Ctrl+Shift+UpArrow | preview:Ctrl+Shift+DownArrow"/>
             <script=ExclusiveKeyboardMode on="preview: Ctrl-Alt | Alt-Ctrl"/>
             <script="vtm.gear.SetHandled()" on="Esc"/> <!-- Do nothing. The Esc key is used as a modifier. Press/release events are sent only if the key is released without being combined with any other keys. -->
             <script                         on="-Esc">  -- Clear selection (if any) and send Esc press/release events.
@@ -588,8 +594,7 @@ R"==(
         <Taskbar>
             <taskbar_tooltip>
                 "\e[1m"" Desktop Taskbar                     ""\e[m\n"
-                       "   RightDrag to scroll menu up/down  ""\n"
-                       "   LeftDrag to move desktop viewport "
+                       "   RightDrag to scroll menu up/down  "
             </taskbar_tooltip>
             <Apps label="apps">
                 <tooltip>
@@ -597,10 +602,9 @@ R"==(
                            " Can be configured in ~/.config/vtm/settings.xml "
                 </tooltip>
                 <deftooltip>
-                    " Application:                               ""\n"
-                    "   LeftClick to launch application instance ""\n"
-                    "   RightClick to set as default             ""\n"
-                    "   LeftDrag to move desktop viewport        "
+                    " Application ""\n"
+                    "   LeftClick to launch a new window ""\n"
+                    "   RightClick to select the application for Super+Enter "
                 </deftooltip>
                 <toggletooltip>
                     " Window list disclosure toggle                  ""\n"
@@ -611,15 +615,14 @@ R"==(
                 <Close tooltip=" Close application window "/>
                 <App>
                    <tooltip>
-                        " Running application          ""\n"
-                        "   LeftClick to activate      ""\n"
-                        "   DoubleLeftClick to fly to  "
+                        " Running application ""\n"
+                        "   LeftClick to switch workspace and focus this window "
                    </tooltip>
                 </App>
             </Apps>
             <tooltip_footer>
-                "   LeftClick to launch instance ""\n"
-                "   RightClick to set as default "
+                "   LeftClick to launch a new window ""\n"
+                "   RightClick to select the application for Super+Enter "
             </tooltip_footer>
             <Terminal    label="Terminal Emulator" title="Terminal"       tooltip="\e[1m Terminal Console               \e[m\n"|tooltip_footer/>
             <Tile        label="Window Manager"    title="Window Manager" tooltip="\e[1m Tiling Window Manager          \e[m\n"|tooltip_footer/>

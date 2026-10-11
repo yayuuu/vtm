@@ -909,13 +909,50 @@ namespace netxs::app::shared
                 def_cfg.combine_item(src_cfg);
             }
         }
-        static auto settings(qiew cliopt, bool print = faux)
+        static auto default_config() -> text const&
         {
             static auto defaults = utf::replace_all(
                 #include "../../vtm.xml"
                 , "\n\n", "\n");
+            return defaults;
+        }
+        static void create_user_config(view config_utf8)
+        {
+            if (os::path::home.empty()) return;
+            auto [path, path_str] = os::path::expand("~/.config/vtm/settings.xml");
+            auto ec = std::error_code{};
+            // Preserve existing files, including intentionally empty files and symlinks.
+            auto status = os::fs::symlink_status(path, ec);
+            if (os::fs::exists(status)) return;
+            os::fs::create_directories(path.parent_path(), ec);
+            if (ec)
+            {
+                log("%%Cannot create settings directory %path%: %error%", prompt::apps, path_str, ec.message());
+                return;
+            }
+            #if defined(_WIN32)
+                auto file = ::CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+                                          nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            #else
+                auto file = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+            #endif
+            if (file == os::invalid_fd) return; // Another first start may have created it.
+            auto success = os::io::send(file, config_utf8);
+            os::close(file);
+            if (success)
+            {
+                log("%%Created default settings %path%", prompt::apps, path_str);
+            }
+            else
+            {
+                os::fs::remove(path, ec); // Remove only our incomplete new file.
+                log("%%Cannot write default settings %path%", prompt::apps, path_str);
+            }
+        }
+        static auto settings(qiew cliopt, bool print = faux, bool create_defaults = faux)
+        {
             auto envopt = os::env::get("VTM_CONFIG");
-            auto defcfg = xml::document{ defaults };
+            auto defcfg = xml::document{ default_config() };
             auto envcfg = xml::document{};
             auto dvtcfg = xml::document{};
             auto clicfg = xml::document{};
@@ -977,6 +1014,11 @@ namespace netxs::app::shared
             overlay_config(defcfg, envcfg);
             overlay_config(defcfg, dvtcfg);
             overlay_config(defcfg, clicfg);
+
+            if (create_defaults && cliopt.empty() && envopt.empty() && os::dtvt::config.empty())
+            {
+                create_user_config(defcfg.page.utf8());
+            }
 
             return defcfg;
         }

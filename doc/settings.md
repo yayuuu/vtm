@@ -1,5 +1,24 @@
 # Text-based desktop environment settings
 
+## yayuuu fork defaults and first start
+
+The built-in desktop starts with four invisible workspace regions and a single
+Workspaces row, Ctrl+Alt+1 through Ctrl+Alt+4 to switch regions, and Super+Enter
+to launch the selected application. Terminal windows use an integrated title
+bar, acrylic blur, half-cell edges and translucent window colors. Window launch
+positions are centered and cascaded; left-button desktop panning is disabled.
+The standard Terminal, Tile, Site and Logs applications remain available.
+
+On the first normal desktop start, VTM creates `~/.config/vtm/settings.xml`
+from the effective initial settings, including any system-wide overrides.
+The generated file is editable and uses the same settings format as this document.
+Existing files, including empty files and symlinks, are never overwritten.
+Explicit `--config`, `VTM_CONFIG` or received DirectVT settings bypass automatic
+file creation; information commands such as `--help` and `--listconfig` do not
+create files either. If the home directory is read-only, VTM continues using
+its built-in settings. Removing the user settings file restores the fork defaults
+on the next start of a new desktop session.
+
 ```mermaid
 graph TB
     subgraph Settings loading order

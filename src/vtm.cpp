@@ -419,7 +419,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-        auto xmldoc = app::shared::load::settings(cliopt);
+        auto xmldoc = app::shared::load::settings(cliopt, false, whoami != type::logmon);
         auto client = os::ipc::socket::open<os::role::client, faux>(prefix, denied);
         auto signal = ptr::shared<os::fire>(os::process::started(prefix)); // Signaling that the server is ready for incoming connections.
 
