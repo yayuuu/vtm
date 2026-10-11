@@ -1028,6 +1028,7 @@ namespace netxs::app::desk
                 });
             bttns_cake->attach(app::shared::underlined_hz_scrollbar(bttns_area));
             auto logout_only = config.settings::take("/config/desktop/taskbar/logout_only", false);
+            auto logout_disconnect = config.settings::take("/config/desktop/taskbar/logout_disconnect", false);
             auto bttns = bttns_area->attach(ui::fork::ctor(axis::X, 0, 1, logout_only ? 0 : 1))
                 ->limits(bttn_min_size, bttn_max_size);
             auto disconnect_park_ptr = bttns->attach(slot::_1, ui::cake::ctor())
@@ -1044,9 +1045,16 @@ namespace netxs::app::desk
                         boss.base::signal(tier::release, desk::events::ui::activate, gear);
                         gear.dismiss(true);
                     });
-                    boss.LISTEN(tier::release, desk::events::ui::activate, gear, -, (name, logout_only))
+                    boss.LISTEN(tier::release, desk::events::ui::activate, gear, -, (name, logout_only, logout_disconnect))
                     {
-                        if (logout_only)
+                        if (logout_only && logout_disconnect)
+                        {
+                            // A session supervisor owns the private desktop server.
+                            // Disconnect this client so its supervisor can close the
+                            // session, including background apps and portals.
+                            gear.owner.base::signal(tier::preview, e2::conio::quit);
+                        }
+                        else if (logout_only)
                         {
                             world.base::signal(tier::release, e2::shutdown::bygear, gear);
                             if (!world.bell::accomplished())
