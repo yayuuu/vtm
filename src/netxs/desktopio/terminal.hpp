@@ -10636,6 +10636,7 @@ namespace netxs::ui
                                                     }},
                 { methods::CopySelection,           [&]
                                                     {
+                                                        auto fallback = luafx.get_args_or(1, ""s);
                                                         luafx.run_with_gear([&](auto& gear)
                                                         {
                                                             if (selection_active())
@@ -10646,6 +10647,13 @@ namespace netxs::ui
                                                             else if (auto v = ipccon.get_current_line())
                                                             {
                                                                 _copy(gear, v.value());
+                                                                gear.set_handled();
+                                                            }
+                                                            else if (fallback.size())
+                                                            {
+                                                                // Terminal applications can own their selection
+                                                                // and export it through OSC 52 themselves.
+                                                                data_out(fallback);
                                                                 gear.set_handled();
                                                             }
                                                         });
