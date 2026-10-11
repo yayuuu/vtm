@@ -9065,10 +9065,37 @@ namespace netxs::ui
         // term: Forward clipboard data (OSC 52).
         void forward_clipboard(view data)
         {
+            if (data.ends_with("\x1b\\")) data.remove_suffix(2);
+            else if (data.ends_with('\x07')) data.remove_suffix(1);
             auto clipdata = input::clipdata{};
             auto delimpos = data.find(';');
             if (delimpos != text::npos)
             {
+                auto selections = data.substr(0, delimpos);
+                if (data.substr(delimpos + 1) == "?")
+                {
+                    // Standard OSC 52 query: reply to the requesting terminal,
+                    // using only a user with keyboard focus on this terminal.
+                    if (selections.empty()) selections = "s";
+                    for (auto selection : selections)
+                    {
+                        if (view{ "cpqs01234567" }.find(selection) == view::npos) continue;
+                        auto text_data = text{};
+                        auto gates = base::riseup(tier::request, e2::form::state::keybd::enlist);
+                        for (auto gate_id : gates)
+                        {
+                            if (auto gear_ptr = base::getref<hids>(gate_id))
+                            {
+                                text_data = get_clipboard_text(*gear_ptr);
+                                break;
+                            }
+                        }
+                        escbuf.add("\x1b]52;", selection, ';', utf::base64(text_data), "\x1b\\");
+                        answer(escbuf);
+                        break;
+                    }
+                    return; // A query must never overwrite the clipboard.
+                }
                 clipdata.meta = data.substr(0, delimpos++);
                 clipdata.utf8.clear();
                 utf::unbase64(data.substr(delimpos), clipdata.utf8);
@@ -9703,7 +9730,7 @@ namespace netxs::ui
             }
             return active;
         }
-        auto get_clipboard_text(hids& gear)
+        text get_clipboard_text(hids& gear)
         {
             gear.owner.base::signal(tier::request, input::events::clipboard, gear);
             auto& data = gear.board::cargo;
