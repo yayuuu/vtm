@@ -2577,9 +2577,14 @@ namespace netxs::app::vtm
                     auto origin = region->base::template property<twod>("window.workspace_origin", twod{});
                     auto viewport = usergate.base::signal(tier::request, e2::form::prop::viewport);
                     usergate.base::property<id_t>("workspace.active") = region->id;
-                    // The taskbar caches its canvas. A keyboard switch must
-                    // repaint its workspace selection even without mouse input.
-                    for (auto& overlay : usergate.base::subset) overlay->base::deface();
+                    // Invalidate nested overlay caches as well as their root:
+                    // workspace selection must repaint without mouse input.
+                    auto redraw = [](auto&& self, auto& widget) -> void
+                    {
+                        for (auto& child : widget.base::subset) self(self, *child);
+                        widget.base::deface();
+                    };
+                    for (auto& overlay : usergate.base::subset) redraw(redraw, *overlay);
                     auto gear_id = usergate.base::template property<id_t>("workspace.gear", 0);
                     auto& remembered = usergate.base::template property<std::unordered_map<id_t, ui::wptr>>("workspace.focus", {});
                     auto target = window_inst.base::property("window.menuid") == "workspaces" ? remembered[region->id].lock() : window_inst.This();
