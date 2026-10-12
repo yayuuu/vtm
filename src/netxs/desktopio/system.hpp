@@ -2367,6 +2367,66 @@ namespace netxs::os
     namespace clipboard
     {
         static constexpr auto ocs52head = "\033]52;"sv;
+        // Terminal emulators can use OSC 52. Console desktops without OSC 52
+        // support can explicitly select the standard X11/Wayland clipboard
+        // supplied by vtm-tools. Never choose a remote display automatically.
+        bool system_transfer(bool write, text& data)
+        {
+            #if defined(__linux__) && defined(__GLIBC__)
+                if (os::env::get("VTM_CLIPBOARD_BACKEND") != "system") return faux;
+                auto in = ::tmpfile();
+                auto out = ::tmpfile();
+                if (!in || !out)
+                {
+                    if (in) ::fclose(in);
+                    if (out) ::fclose(out);
+                    return faux;
+                }
+                auto success = faux;
+                if (!write || ::fwrite(data.data(), 1, data.size(), in) == data.size())
+                {
+                    ::rewind(in);
+                    auto actions = posix_spawn_file_actions_t{};
+                    ::posix_spawn_file_actions_init(&actions);
+                    ::posix_spawn_file_actions_adddup2(&actions, ::fileno(in), STDIN_FILENO);
+                    ::posix_spawn_file_actions_adddup2(&actions, ::fileno(out), STDOUT_FILENO);
+                    ::posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+                    ::posix_spawn_file_actions_addclosefrom_np(&actions, 3);
+                    auto args = std::vector<text>{ "/usr/bin/timeout", "--kill-after=1", "3",
+                                                  "/usr/bin/vtm-clipboard" };
+                    if (!write) args.push_back("--paste");
+                    auto argv = std::vector<char*>{};
+                    for (auto& arg : args) argv.push_back(arg.data());
+                    argv.push_back(nullptr);
+                    auto pid = pid_t{};
+                    if (!::posix_spawn(&pid, argv.front(), &actions, nullptr, argv.data(), environ))
+                    {
+                        auto status = int{};
+                        auto waited = pid_t{};
+                        do waited = ::waitpid(pid, &status, 0); while (waited < 0 && errno == EINTR);
+                        success = waited == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+                        if (success && !write)
+                        {
+                            ::rewind(out);
+                            auto content = text{};
+                            char buffer[65536];
+                            while (auto n = ::fread(buffer, 1, sizeof(buffer), out))
+                            {
+                                if (content.size() + n > 16 * 1024 * 1024) { success = faux; break; }
+                                content.append(buffer, n);
+                            }
+                            if (success) data = std::move(content);
+                        }
+                    }
+                    ::posix_spawn_file_actions_destroy(&actions);
+                }
+                ::fclose(in);
+                ::fclose(out);
+                return success;
+            #else
+                return faux;
+            #endif
+        }
         #if defined(_WIN32)
             static auto sequence = std::numeric_limits<DWORD>::max();
             static auto mutex   = std::mutex();
@@ -2611,6 +2671,8 @@ namespace netxs::os
 
             #else
 
+                auto plain = form == mime::textonly || form == mime::disabled ? utf8 : page{ utf8 }.to_utf8();
+                if (form != mime::safetext && system_transfer(true, plain)) return true;
                 auto yield = escx{};
                 if (form == mime::richtext)
                 {
@@ -5142,6 +5204,16 @@ namespace netxs::os
                 }
                 void handle(s11n::xs::clipdata_request lock)
                 {
+                    auto text = netxs::text{};
+                    if (os::clipboard::system_transfer(faux, text))
+                    {
+                        auto data = s11n::clipdata.freeze();
+                        if (data.thing.utf8 != text)
+                        {
+                            input::board::normalize(data.thing, gear_id, datetime::now(), dtvt::gridsz / 2,
+                                                    text, mime::textonly);
+                        }
+                    }
                     s11n::recycle_cliprequest(dtvt::client, lock);
                 }
 
